@@ -1,0 +1,49 @@
+{
+  "name": "p2p-desktop",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Salas independentes com tela e ?udio do sistema",
+  "author": "P2P Desktop",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "test": "node --test test/*.test.mjs",
+    "dist": "electron-builder --win nsis --x64 --publish never",
+    "release": "electron-builder --win nsis --x64 --publish always"
+  },
+  "devDependencies": {
+    "electron": "44.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.p2p.desktop",
+    "productName": "P2P Desktop",
+    "artifactName": "P2P-Desktop-Setup-${version}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "chcped",
+      "repo": "luxlab",
+      "releaseType": "draft"
+    },
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  }
+}
