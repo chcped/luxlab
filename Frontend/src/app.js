@@ -1,5 +1,13 @@
 ﻿import { RoomClient, serverURL, invitation } from './room-client.mjs';
 const $ = id => document.getElementById(id);
+import { createPlayback } from './playback.mjs';
+const playback = createPlayback($('player'), {
+  prompt: visible => { $('play').hidden = !visible; },
+  report: error => {
+    console.error('[playback]', error.name, error.message, $('player').error?.code);
+    toast(error.name === 'NotSupportedError' ? 'O vídeo recebido não pôde ser carregado. Peça para reiniciar o compartilhamento.' : 'Falha ao reproduzir vídeo ou áudio. Confira a saída de áudio e tente novamente.', true);
+  }
+});
 if (window.desktop?.onUpdateState) {
   let dismissedVersion;
   const renderUpdate = state => {
@@ -88,16 +96,16 @@ function renderMembers() {
 }
 function selectAvailable() { if (!members.some(m => m.id === watched && m.sharing)) { const next = members.find(m => m.sharing && m.id !== client?.self) || members.find(m => m.sharing); showStream(next?.id); renderMembers(); } else { const member = members.find(m => m.id === watched); $('watching-label').textContent = watched === client?.self ? 'Sua tela · prévia sem retorno de áudio' : `Assistindo à tela de ${member.profile.name}`; } }
 function showStream(id) {
-  watched = id; const stream = id === client?.self ? localStream : remote.get(id); const player = $('player'); player.srcObject = stream || null;
+  watched = id; const stream = id === client?.self ? localStream : remote.get(id);
   const member = members.find(m => m.id === id);
   $('empty-screen').hidden = !!id; $('live-label').hidden = !id; $('play').hidden = true;
   $('watching-label').textContent = id ? id === client?.self ? 'Sua tela · prévia sem retorno de áudio' : `Assistindo à tela de ${member?.profile.name || 'participante'}` : 'Sua sala está pronta';
-  applyVolume(); if (stream) player.play().catch(() => { if (player.srcObject === stream) $('play').hidden = false; }); updateConnection();
+  applyVolume(); playback.setStream(stream || null); updateConnection();
 }
 function updateConnection() { const state = connections.get(watched); $('connection').textContent = !client ? '● Desconectado' : !watched || watched === client.self ? '● Sala conectada' : state === 'connected' ? '● Transmissão conectada' : state === 'failed' || state === 'disconnected' ? '● Transmissão sem conexão' : '● Conectando transmissão'; }
 let muted = false;
 function applyVolume() { $('player').volume = Number($('volume').value); $('player').muted = muted || watched === client?.self; $('mute').textContent = muted ? '♪ ×' : '♫'; $('volume-label').textContent = muted ? 'Som desativado' : `Volume ${Math.round(Number($('volume').value) * 100)}%`; }
-$('volume').oninput = applyVolume; $('mute').onclick = () => { muted = !muted; applyVolume(); }; $('play').onclick = () => $('player').play().then(() => { $('play').hidden = true; }).catch(() => toast('Não foi possível reproduzir a transmissão.', true));
+$('volume').oninput = applyVolume; $('mute').onclick = () => { muted = !muted; applyVolume(); }; $('play').onclick = () => playback.play();
 $('fullscreen').onclick = () => { const action = document.fullscreenElement ? document.exitFullscreen() : $('screen').requestFullscreen(); action.catch(() => toast('Tela cheia indisponível.', true)); };
 $('copy-invite').onclick = async () => {
   if (!session?.roomId) return;

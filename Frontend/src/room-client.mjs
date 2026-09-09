@@ -39,7 +39,14 @@ export class RoomClient {
     const peer = { pc, polite: this.self > id, makingOffer: false, ignoreOffer: false, settingAnswer: false,
       stream: new MediaStream(), candidates: [], senders: {}, initiator: this.self < id };
     this.peers.set(id, peer);
-    pc.ontrack = ({ track }) => { peer.stream.addTrack(track); this.callbacks.stream?.(id, peer.stream); };
+    pc.ontrack = ({ track }) => {
+      peer.stream.addTrack(track);
+      // Tracks arrive during negotiation, before media packets start flowing.
+      track.onunmute = () => {
+        if (!this.closed && this.peers.get(id) === peer) this.callbacks.stream?.(id, peer.stream);
+      };
+      this.callbacks.stream?.(id, peer.stream);
+    };
     pc.onicecandidate = ({ candidate }) => { if (candidate) this.send({ type: 'signal', to: id, payload: { candidate: candidate.toJSON() } }); };
     pc.onconnectionstatechange = () => {
       this.callbacks.connection?.(id, pc.connectionState);
@@ -95,7 +102,7 @@ export class RoomClient {
   }
   remove(id) {
     const peer = this.peers.get(id); this.peers.delete(id);
-    if (peer) { peer.pc.onconnectionstatechange = null; peer.pc.onnegotiationneeded = null; peer.pc.onicecandidate = null; peer.pc.close(); }
+    if (peer) { for (const track of peer.stream.getTracks()) track.onunmute = null; peer.pc.ontrack = null; peer.pc.onconnectionstatechange = null; peer.pc.onnegotiationneeded = null; peer.pc.onicecandidate = null; peer.pc.close(); }
     this.callbacks.removed?.(id);
   }
   fail(message) { if (this.closed) return; this.close(); this.callbacks.error?.(message); }

@@ -39,7 +39,7 @@ if (primaryInstance) app.whenReady().then(() => {
   });
   protocol.handle('app', request => {
     const url = new URL(request.url);
-    const files = ['/index.html', '/styles.css', '/app.js', '/room-client.mjs'];
+    const files = ['/index.html', '/styles.css', '/app.js', '/room-client.mjs', '/playback.mjs'];
     if (url.host !== 'desktop' || !files.includes(url.pathname)) return new Response('', { status: 404 });
     return net.fetch(pathToFileURL(path.join(__dirname, '../src', url.pathname.slice(1))).href);
   });
@@ -53,10 +53,9 @@ if (primaryInstance) app.whenReady().then(() => {
     selectedSource = id;
     selectionExpires = Date.now() + 10000;
   });
-  const allowCapture = (contents, permission) => !!contents &&
-    contents === window?.webContents && trusted(contents.mainFrame) &&
-    (permission === 'display-capture' || permission === 'media') &&
-    !!selectedSource && Date.now() < selectionExpires;
+  const allowCapture = (contents, permission) => require('./permissions.cjs').allowPermission({
+    contents, permission, window, selectedSource, selectionExpires, trusted
+  });
   session.defaultSession.setPermissionCheckHandler((contents, permission) =>
     allowCapture(contents, permission));
   session.defaultSession.setPermissionRequestHandler((contents, permission, callback) =>
