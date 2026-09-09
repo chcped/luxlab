@@ -10,13 +10,42 @@ Execute `npm run dist` e instale o `.exe` gerado em `dist`. Usuários de versõe
 
 ## Publicar uma atualização
 
+### Script automático (Windows)
+
+No PowerShell, entre em `Frontend` e configure `GH_TOKEN` no ambiente com um token do GitHub que tenha acesso a `chcped/luxlab` e permissão **Contents: Read and write**. `GITHUB_TOKEN` também é aceito. Não salve o token no código ou em arquivos versionados.
+
+```powershell
+cd Frontend
+npm run release -- --dry-run
+npm run release
+```
+
+O comando padrão aumenta a versão patch (por exemplo, `0.3.0` para `0.3.1`), executa os testes do Frontend, gera o instalador e envia `.exe`, `.exe.blockmap` e `latest.yml` para um rascunho. A release só se torna pública depois de confirmar os três uploads. Requer as dependências instaladas (`npm ci`).
+
+Outras opções:
+
+```powershell
+npm run release -- minor
+npm run release -- major
+npm run release -- current
+npm run release -- patch --draft
+```
+
+`current` publica a versão atual sem aumentá-la, útil para a primeira distribuição ou para tentar novamente após uma falha no build. `--draft` mantém a release em rascunho para revisão manual. `--dry-run` apenas mostra o plano, sem testar credenciais, gerar arquivos ou publicar.
+
+Uma release existente com a mesma tag, inclusive em rascunho, interrompe o script antes do build. Em caso de falha no upload, revise o rascunho no GitHub: complete os arquivos manualmente ou exclua o rascunho incompleto antes de repetir com `current`. Não publique arquivos de builds diferentes juntos.
+
+O script altera `package.json` e `package-lock.json`, mas não faz commit nem push do código. Envie suas alterações de código antes de publicar; uma tag nova criada pelo GitHub aponta para a branch padrão remota. Depois, versione também os arquivos de versão alterados pelo script.
+
+### Publicação manual
+
 1. Aumente a versão com `npm version patch --no-git-tag-version`.
 2. Execute `npm run dist`.
 3. Crie uma release em `chcped/luxlab` com a tag correspondente, por exemplo `v0.3.1`.
 4. Anexe o instalador `.exe`, seu `.exe.blockmap` e `latest.yml` gerados juntos em `dist`.
 5. Publique como release estável, sem marcar prerelease. Não publique enquanto os arquivos ainda estiverem sendo enviados.
 
-Como alternativa, configure `GH_TOKEN` apenas no ambiente de publicação, com permissão para escrever nas releases desse repositório, e execute `npm run release`. Esse comando envia os arquivos para uma release em rascunho; revise e publique pelo GitHub. Nunca coloque tokens no código, no instalador ou no frontend. `npm run dist` não publica nada.
+`npm run dist` não publica nada. Para automatizar o processo, use o script acima.
 
 O repositório deve ter pelo menos um commit para criar a primeira tag/release. Pode conter apenas um README e os instaladores nas releases; não é necessário publicar o código.
 

@@ -1,6 +1,6 @@
 {
   "name": "p2p-desktop",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "description": "Salas independentes com tela e ?udio do sistema",
   "author": "P2P Desktop",
@@ -10,7 +10,7 @@
     "dev": "electron .",
     "test": "node --test test/*.test.mjs",
     "dist": "electron-builder --win nsis --x64 --publish never",
-    "release": "electron-builder --win nsis --x64 --publish always"
+    "release": "node scripts/release.cjs"
   },
   "devDependencies": {
     "electron": "44.2.0",
