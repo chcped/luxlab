@@ -1,6 +1,8 @@
 # Atualizações do aplicativo Windows
 
-O aplicativo instalado consulta as releases públicas de https://github.com/chcped/luxlab 15 segundos após abrir e a cada 4 horas. Baixa novas versões estáveis em segundo plano e mostra “Reiniciar para atualizar” quando o download termina. “Depois” oculta o aviso até a próxima abertura. Fechar normalmente não instala a atualização. Reiniciar pelo botão encerra a sala/captura, instala e abre o aplicativo novamente.
+Ao abrir o aplicativo instalado no Windows, uma tela com o logo busca atualizações. Se houver uma versão estável superior, mostra o download e “Aplicando atualização”, instala e reinicia automaticamente antes de abrir a sala. No primeiro reinício bem-sucedido, pula a busca; nas aberturas seguintes volta a verificar. Sem atualização ou com falha de rede, abre normalmente. A busca tem limite de 20 segundos e o download de 3 minutos; se exceder, o app abre e qualquer download posterior usa o aviso normal, sem reiniciar uma sessão ativa.
+
+Durante o uso, verifica a cada 4 horas e oferece “Reiniciar para atualizar”. Na inicialização em segundo plano (`--background`), preserva o fluxo sem janela e sem instalação forçada.
 
 Em `npm run dev` o atualizador fica desativado. A versão web não usa esse mecanismo.
 

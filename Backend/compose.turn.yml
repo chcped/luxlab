@@ -7,6 +7,8 @@ services:
     command:
       - -n
       - --log-file=stdout
+      - --simple-log
+      - --verbose
       - --listening-port=3478
       - --min-port=49160
       - --max-port=49200
@@ -15,9 +17,7 @@ services:
       - --fingerprint
       - --use-auth-secret
       - --static-auth-secret=${TURN_SECRET:?Defina TURN_SECRET no .env}
-      - --no-cli
       - --no-tls
-      - --no-dtls
       - --no-multicast-peers
       - --denied-peer-ip=0.0.0.0-0.255.255.255
       - --denied-peer-ip=10.0.0.0-10.255.255.255
@@ -28,4 +28,7 @@ services:
       - --denied-peer-ip=::1
       - --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
       - --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "5" }
     security_opt: ["no-new-privileges:true"]

@@ -1,4 +1,7 @@
+import { log, diagnostic } from './logger.js';
 import crypto from 'node:crypto';
+import { installAccounts, httpError } from './accounts.js';
+import { installSavedRooms } from './saved-rooms.js';
 import { promisify } from 'node:util';
 import jwt from 'jsonwebtoken';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -16,15 +19,22 @@ export function profile(value = {}) {
 export function installStandalone(app, server, options) {
   const { secret, allowedOrigins, maxRooms = 100, maxMembers = 8, ttl = 14400, allowGuests = true,
     authSecret = secret, authIssuer = 'luxlab-auth', authAudience = 'luxlab-desktop',
-    iceServers = [], turnUrls = [], turnSecret = '' } = options;
+    iceServers = [], turnUrls = [], turnSecret = '', iceTransportPolicy = 'all', accounts = null, saved = null } = options;
+  if (!['all', 'relay'].includes(iceTransportPolicy)) throw new Error('ICE_TRANSPORT_POLICY deve ser all ou relay');
+  const turnConfigured = !!(turnSecret && turnUrls.length) || iceServers.some(s => [].concat(s.urls).some(u => /^turns?:/.test(u)));
+  if (iceTransportPolicy === 'relay' && !turnConfigured) throw new Error('Modo relay exige TURN configurado');
+  log('info', 'rtc.config', { iceTransportPolicy, turnConfigured });
   const rooms = new Map();
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 65536, perMessageDeflate: false });
   const sign = claims => jwt.sign(claims, secret, { algorithm: 'HS256', issuer: 'luxlab-rooms', audience: 'room-member', expiresIn: ttl });
   const verify = token => jwt.verify(token, secret, { algorithms: ['HS256'], issuer: 'luxlab-rooms', audience: 'room-member' });
   const wrap = fn => (req, res, next) => Promise.resolve(fn(req, res)).catch(next);
   app.use('/api/v2', rateLimit({ windowMs: 60000, limit: 40, standardHeaders: 'draft-7', legacyHeaders: false }));
+  app.use('/api/v2', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
   function identity(req, res, next) {
     const token = req.get('authorization')?.replace(/^Bearer /, '');
+    const local = accounts?.authenticate(token);
+    if (local) { req.user = local; req.account = local.id; return next(); }
     if (!token && allowGuests) { req.account = null; return next(); }
     try {
       const claims = jwt.verify(token, authSecret, { algorithms: ['HS256'], issuer: authIssuer, audience: authAudience });
@@ -43,17 +53,54 @@ export function installStandalone(app, server, options) {
   const send = (ws, data) => {
     if (ws.readyState !== WebSocket.OPEN) return;
     if (ws.bufferedAmount > 1024 * 1024) { ws.close(4408, 'Conexão lenta'); return; }
-    ws.send(JSON.stringify(data));
+    const encoded = JSON.stringify(data);
+    log('debug', 'ws.out', { connectionId: ws.logId, type: data.type, bytes: Buffer.byteLength(encoded), bufferedBytes: ws.bufferedAmount });
+    ws.send(encoded);
   };
   const summary = member => ({ id: member.id, profile: member.profile, sharing: member.sharing, owner: member.owner });
   const broadcast = (room, data) => { for (const member of room.members.values()) send(member.ws, data); };
   const state = room => broadcast(room, { type: 'members', members: [...room.members.values()].map(summary), locked: !!room.password });
   const joinResponse = (room, req) => {
     const id = crypto.randomUUID();
-    return { roomId: room.id, token: sign({ roomId: room.id, memberId: id, account: req.account, profile: profile(req.body?.profile) }),
-      iceServers: rtcConfig(id), expiresAt: room.expiresAt };
+    return { roomId: room.id, token: sign({ roomId: room.id, memberId: id, account: req.account, profile: profile(req.body?.profile),
+      ...(req.user ? { accountSession: req.user.sessionId } : {}),
+      ...(room.persistent ? { membershipVersion: saved.membership(room.id, req.account).version } : {}) }),
+      iceServers: rtcConfig(id), iceTransportPolicy, expiresAt: room.persistent ? Date.now() + ttl * 1000 : room.expiresAt };
   };
-  app.get('/api/v2/config', (_req, res) => res.json({ allowGuests, maxMembers, roomTtlSeconds: ttl }));
+  function runtime(id) {
+    if (rooms.has(id)) return rooms.get(id);
+    if (!saved?.get(id)) return null;
+    if (rooms.size >= maxRooms) throw httpError(503, 'Servidor com limite de salas ativas atingido.');
+    const room = { id, persistent: true, password: null, expiresAt: Infinity, idleExpires: Date.now() + 60000, members: new Map(), messages: [], banned: new Set() };
+    rooms.set(id, room);
+    return room;
+  }
+  function revoke(id, accountId) {
+    const room = rooms.get(id);
+    if (!room) return;
+    for (const member of room.members.values()) if (!accountId || member.account === accountId) {
+      room.members.delete(member.id); member.ws.close(4403, 'Acesso à sala removido');
+    }
+    if (!room.members.size) rooms.delete(id); else state(room);
+  }
+  function joinSaved(id, req) {
+    if (!req.user) throw httpError(401, 'Faça login com seu e-mail.');
+    if (!saved.get(id) || !saved.membership(id, req.account)) throw httpError(404, 'Sala não encontrada ou acesso não autorizado.');
+    const room = runtime(id);
+    if (room.members.size >= maxMembers) throw httpError(409, 'Sala cheia.');
+    return joinResponse(room, req);
+  }
+  function validAccount(claims, room) {
+    if (claims.accountSession && !accounts?.sessionValid(claims.accountSession, claims.account)) return false;
+    if (!room.persistent) return true;
+    return !!claims.accountSession && typeof claims.membershipVersion === 'string' && !!saved.get(room.id) && saved.membership(room.id, claims.account)?.version === claims.membershipVersion;
+  }
+  if (accounts) installAccounts(app, accounts, sessionId => {
+    for (const ws of sockets.clients) if (ws.accountSession === sessionId) ws.close(4401, 'Login encerrado');
+  });
+  if (accounts && saved) installSavedRooms(app, { accounts, saved, join: joinSaved, revoke });
+  app.get('/api/v2/config', (_req, res) => res.json({ allowGuests, maxMembers, roomTtlSeconds: ttl,
+    emailLogin: !!accounts?.enabled, persistentRooms: !!(accounts && saved) }));
   app.post('/api/v2/rooms', identity, wrap(async (req, res) => {
     if (rooms.size >= maxRooms) return res.status(503).json({ error: 'Servidor com limite de salas atingido.' });
     const password = req.body?.password;
@@ -70,6 +117,7 @@ export function installStandalone(app, server, options) {
     res.status(201).json(result);
   }));
   app.post('/api/v2/rooms/:id/join', identity, wrap(async (req, res) => {
+    if (saved?.get(req.params.id)) return res.json(joinSaved(req.params.id, req));
     const room = rooms.get(req.params.id);
     if (!room || room.expiresAt <= Date.now()) return res.status(404).json({ error: 'Sala não encontrada ou expirada.' });
     if (room.password) {
@@ -88,6 +136,8 @@ export function installStandalone(app, server, options) {
   };
   server.on('upgrade', upgrade);
   sockets.on('connection', ws => {
+    ws.logId = crypto.randomUUID(); const started = Date.now();
+    log('info', 'ws.open', { connectionId: ws.logId });
     let member, room, expires;
     ws.alive = true;
     ws.on('pong', () => { ws.alive = true; });
@@ -98,14 +148,20 @@ export function installStandalone(app, server, options) {
       if (++count > 400) { ws.close(4429, 'Muitas mensagens'); return; }
       let msg; try { msg = JSON.parse(raw.toString()); if (!msg || typeof msg !== 'object') throw new Error(); }
       catch { ws.close(4400, 'Mensagem inválida'); return; }
+      log('debug', 'ws.in', { connectionId: ws.logId, type: ['join', 'signal', 'sharing', 'profile', 'chat', 'kick', 'telemetry'].includes(msg.type) ? msg.type : 'unknown', bytes: raw.length });
       if (!member) {
         try {
           if (msg.type !== 'join') throw new Error();
           const claims = verify(msg.token);
-          room = rooms.get(claims.roomId);
+          room = runtime(claims.roomId);
           if (!room || room.expiresAt <= Date.now() || room.members.size >= maxMembers || room.members.has(claims.memberId) || room.banned.has(claims.memberId)) throw new Error();
-          member = { id: claims.memberId, ws, profile: profile(claims.profile), sharing: false, owner: room.ownerId === claims.memberId };
+          if (!validAccount(claims, room)) throw new Error();
+          member = { id: claims.memberId, ws, profile: profile(claims.profile), sharing: false,
+            account: claims.account, accountSession: claims.accountSession, membershipVersion: claims.membershipVersion,
+            owner: room.persistent ? saved.get(room.id).owner_id === claims.account : room.ownerId === claims.memberId };
+          ws.accountSession = claims.accountSession;
           room.members.set(member.id, member);
+          log('info', 'room.join', { connectionId: ws.logId, roomId: room.id, memberId: member.id, members: room.members.size });
           clearTimeout(timeout);
           expires = setTimeout(() => ws.close(4401, 'Sessão expirada'), Math.max(1, claims.exp * 1000 - Date.now()));
           send(ws, { type: 'joined', self: member.id, roomId: room.id, messages: room.messages });
@@ -114,7 +170,12 @@ export function installStandalone(app, server, options) {
         return;
       }
       if (room.members.get(member.id) !== member) return;
-      if (msg.type === 'signal') {
+      if (!validAccount(member, room)) { ws.close(4403, 'Acesso à sala removido'); return; }
+      if (msg.type === 'telemetry') {
+        if (Date.now() - (member.lastTelemetry || 0) > 10000) { member.lastTelemetry = Date.now(); member.telemetryCount = 0; }
+        if ((member.telemetryCount = (member.telemetryCount || 0) + 1) <= 100 && room.members.has(msg.peerId))
+          log('info', 'rtc.client', { roomId: room.id, memberId: member.id, peerId: msg.peerId, metrics: diagnostic(msg.metrics) });
+      } else if (msg.type === 'signal') {
         const target = room.members.get(msg.to);
         if (!target || target === member || !msg.payload || typeof msg.payload !== 'object') return;
         send(target.ws, { type: 'signal', from: member.id, payload: msg.payload });
@@ -131,22 +192,30 @@ export function installStandalone(app, server, options) {
         broadcast(room, { type: 'chat', message });
       } else if (msg.type === 'kick' && member.owner && msg.to !== member.id) {
         const target = room.members.get(msg.to);
+        if (target && room.persistent) {
+          if (target.account === member.account) return;
+          saved.remove(room.id, target.account); revoke(room.id, target.account); return;
+        }
         if (target) { room.banned.add(target.id); room.members.delete(target.id); target.ws.close(4403, 'Removido pelo dono da sala'); state(room); }
       }
     });
-    ws.on('error', () => {});
-    ws.on('close', () => {
+    ws.on('error', error => log('error', 'ws.error', { connectionId: ws.logId, message: error.message }));
+    ws.on('close', (code) => {
+      log('info', 'ws.close', { connectionId: ws.logId, roomId: room?.id, memberId: member?.id, code, durationMs: Date.now() - started });
       clearTimeout(timeout); clearTimeout(expires);
       if (!member || !room || room.members.get(member.id) !== member) return;
       room.members.delete(member.id);
-      if (member.owner && room.members.size) {
+      if (!room.persistent && member.owner && room.members.size) {
         const next = room.members.values().next().value; next.owner = true; room.ownerId = next.id;
       }
       if (!room.members.size) rooms.delete(room.id); else state(room);
     });
   });
   const heartbeat = setInterval(() => {
-    for (const ws of sockets.clients) { if (!ws.alive) ws.terminate(); else { ws.alive = false; ws.ping(); } }
+    accounts?.prune();
+    for (const [id, room] of rooms) if (room.persistent && !room.members.size && room.idleExpires <= Date.now()) rooms.delete(id);
+    for (const room of rooms.values()) for (const member of room.members.values()) if (!validAccount(member, room)) member.ws.close(4403, 'Acesso expirado');
+    for (const ws of sockets.clients) { if (!ws.alive) { log('warn', 'ws.heartbeat_timeout', { connectionId: ws.logId }); ws.terminate(); } else { ws.alive = false; ws.ping(); } }
     for (const [id, room] of rooms) if (room.expiresAt <= Date.now()) {
       rooms.delete(id); for (const m of room.members.values()) m.ws.close(4401, 'Sala expirada');
     }

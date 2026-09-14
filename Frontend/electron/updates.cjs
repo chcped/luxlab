@@ -1,6 +1,6 @@
 const CHECK_INTERVAL = 4 * 60 * 60 * 1000;
 
-function setupUpdates({ app, ipcMain, updater, getWindow, trusted }) {
+function setupUpdates({ app, ipcMain, updater, getWindow, trusted, startupChecked = false }) {
   const enabled = app.isPackaged && process.platform === 'win32';
   let state = { status: enabled ? 'idle' : 'disabled' };
   let checking = false;
@@ -20,7 +20,10 @@ function setupUpdates({ app, ipcMain, updater, getWindow, trusted }) {
     installing = true;
     // Reply to the renderer before closing the application.
     setImmediate(() => {
-      try { updater.quitAndInstall(true, true); }
+      try {
+        require('./startup-update.cjs').updateMarker(app).write(state.version);
+        updater.quitAndInstall(true, true);
+      }
       catch (error) { installing = false; reportError(error); }
     });
     return true;
@@ -47,7 +50,7 @@ function setupUpdates({ app, ipcMain, updater, getWindow, trusted }) {
     catch (error) { reportError(error); }
     finally { checking = false; }
   }
-  const initialTimer = setTimeout(check, 15000);
+  const initialTimer = setTimeout(check, startupChecked ? CHECK_INTERVAL : 15000);
   const interval = setInterval(check, CHECK_INTERVAL);
   initialTimer.unref();
   interval.unref();

@@ -86,3 +86,12 @@ test('sessão expira e token duplicado não substitui participante conectado', a
   assert.equal((await once(owner.ws, 'close'))[0], 4401);
   assert.equal((await api(`/rooms/${room.roomId}/join`)).status, 404);
 });
+
+ test('relay policy is delivered and requires a TURN server', async t => {
+  const { api } = await fixture(t, { iceTransportPolicy: 'relay', turnUrls: ['turn:example.org:3478?transport=udp'], turnSecret: 'test-turn-secret' });
+  const room = (await api('/rooms')).body;
+  assert.equal(room.iceTransportPolicy, 'relay');
+  assert.ok(room.iceServers[0].username);
+  assert.ok(room.iceServers[0].credential);
+  assert.throws(() => installStandalone(express(), http.createServer(), { secret, allowedOrigins: new Set(), iceTransportPolicy: 'relay' }), /TURN/);
+});

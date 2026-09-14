@@ -1,5 +1,7 @@
 node_modules/
 .npm-cache/
 dist/
+diagnostics/turn-load-*.json
+diagnostics/turn-load-*.jsonl
 .env
 *.log
