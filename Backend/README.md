@@ -19,6 +19,17 @@ Consulte [ACCOUNTS.md](ACCOUNTS.md) para configurar SMTP, o volume persistente S
 as rotas da API e a atualização no servidor. Requer Node.js 22.16 ou superior.
 O front de login e gestão dessas salas ainda precisa ser implementado.
 
+## Cloudflare Realtime SFU
+
+Configure `CLOUDFLARE_REALTIME_APP_ID` e `CLOUDFLARE_REALTIME_APP_SECRET` somente no
+`.env` do backend. O App Secret nunca e entregue ao navegador, Electron ou mobile.
+O gateway autenticado em `/api/v2/realtime` aceita tokens de sala e permite assinar
+somente tracks que foram publicadas por outro participante da mesma sala.
+
+Cada participante cria uma session, publica a tela como track `local` e assina as
+tracks anunciadas pelo evento `members`. WebSocket continua cuidando de presenca e
+chat; a midia WebRTC passa diretamente entre cada cliente e o SFU da Cloudflare.
+
 ## Logs e estabilidade WebRTC
 
 Na pasta `Backend`, `docker compose up -d --build` inicia backend e TURN no mesmo projeto.

@@ -20,5 +20,7 @@ export const config = Object.freeze({
   maxViewers: Number(process.env.MAX_VIEWERS_PER_ROOM || 20),
   trustProxy: Number(process.env.TRUST_PROXY || 1),
   maxMessageBytes: 64 * 1024,
-  heartbeatMs: 30_000
+  heartbeatMs: 30_000,
+  cloudflareRealtimeAppId: process.env.CLOUDFLARE_REALTIME_APP_ID || '',
+  cloudflareRealtimeAppSecret: process.env.CLOUDFLARE_REALTIME_APP_SECRET || ''
 });

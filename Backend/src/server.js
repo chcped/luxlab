@@ -13,6 +13,7 @@ import { openAccountStore } from './account-store.js';
 import { createAccounts } from './accounts.js';
 import { createSavedRooms } from './saved-rooms.js';
 import { configuredMailer } from './mail.js';
+import { createCloudflareRealtime } from './cloudflare-realtime.js';
 
 const app = express();
 app.set('trust proxy', config.trustProxy);
@@ -33,6 +34,8 @@ const server = http.createServer(app);
 const store = openAccountStore(process.env.DATABASE_PATH || fileURLToPath(new URL('../data/luxlab.sqlite', import.meta.url)));
 const accounts = createAccounts({ store, secret: config.jwtSecret, sendCode: configuredMailer() });
 const saved = createSavedRooms({ store, secret: config.jwtSecret });
+const realtime = createCloudflareRealtime({ appId: config.cloudflareRealtimeAppId, appSecret: config.cloudflareRealtimeAppSecret });
+if (!realtime) log('warn', 'realtime.unconfigured', { message: 'Configure CLOUDFLARE_REALTIME_APP_ID e CLOUDFLARE_REALTIME_APP_SECRET para habilitar o SFU.' });
 if (!accounts.enabled) log('warn', 'auth.email_unconfigured', { message: 'Configure RESEND_API_KEY e RESEND_FROM, ou SMTP_HOST e SMTP_FROM, para habilitar login por e-mail.' });
 const stop = installStandalone(app, server, {
   accounts, saved,
@@ -44,7 +47,8 @@ const stop = installStandalone(app, server, {
   ttl: Number(process.env.ROOM_TTL_SECONDS || 14400),
   iceTransportPolicy: process.env.ICE_TRANSPORT_POLICY || 'relay',
   iceServers: JSON.parse(process.env.ICE_SERVERS || '[]'),
-  turnUrls: (process.env.TURN_URLS || '').split(',').map(s => s.trim()).filter(Boolean), turnSecret: process.env.TURN_SECRET || ''
+  turnUrls: (process.env.TURN_URLS || '').split(',').map(s => s.trim()).filter(Boolean), turnSecret: process.env.TURN_SECRET || '',
+  realtime
 });
 app.get('/download/windows', downloadDesktop);
 app.get('/health', (_req, res) => res.json({ ok: true, mode: 'standalone' }));

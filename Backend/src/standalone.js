@@ -19,7 +19,7 @@ export function profile(value = {}) {
 export function installStandalone(app, server, options) {
   const { secret, allowedOrigins, maxRooms = 100, maxMembers = 8, ttl = 14400, allowGuests = true,
     authSecret = secret, authIssuer = 'luxlab-auth', authAudience = 'luxlab-desktop',
-    iceServers = [], turnUrls = [], turnSecret = '', iceTransportPolicy = 'all', accounts = null, saved = null } = options;
+    iceServers = [], turnUrls = [], turnSecret = '', iceTransportPolicy = 'all', accounts = null, saved = null, realtime = null } = options;
   if (!['all', 'relay'].includes(iceTransportPolicy)) throw new Error('ICE_TRANSPORT_POLICY deve ser all ou relay');
   const turnConfigured = !!(turnSecret && turnUrls.length) || iceServers.some(s => [].concat(s.urls).some(u => /^turns?:/.test(u)));
   if (iceTransportPolicy === 'relay' && !turnConfigured) throw new Error('Modo relay exige TURN configurado');
@@ -57,7 +57,12 @@ export function installStandalone(app, server, options) {
     log('debug', 'ws.out', { connectionId: ws.logId, type: data.type, bytes: Buffer.byteLength(encoded), bufferedBytes: ws.bufferedAmount });
     ws.send(encoded);
   };
-  const summary = member => ({ id: member.id, profile: member.profile, sharing: member.sharing, owner: member.owner });
+  const roomSession = (room, memberId) => room?.realtimeSessions?.get(memberId);
+  const summary = member => {
+    const media = roomSession(member.room, member.id);
+    return { id: member.id, profile: member.profile, sharing: member.sharing, owner: member.owner,
+      media: media ? { sessionId: media.sessionId, tracks: [...media.published] } : null };
+  };
   const broadcast = (room, data) => { for (const member of room.members.values()) send(member.ws, data); };
   const state = room => broadcast(room, { type: 'members', members: [...room.members.values()].map(summary), locked: !!room.password });
   const joinResponse = (room, req) => {
@@ -71,7 +76,7 @@ export function installStandalone(app, server, options) {
     if (rooms.has(id)) return rooms.get(id);
     if (!saved?.get(id)) return null;
     if (rooms.size >= maxRooms) throw httpError(503, 'Servidor com limite de salas ativas atingido.');
-    const room = { id, persistent: true, password: null, expiresAt: Infinity, idleExpires: Date.now() + 60000, members: new Map(), messages: [], banned: new Set() };
+    const room = { id, persistent: true, password: null, expiresAt: Infinity, idleExpires: Date.now() + 60000, members: new Map(), messages: [], banned: new Set(), realtimeSessions: new Map() };
     rooms.set(id, room);
     return room;
   }
@@ -109,7 +114,7 @@ export function installStandalone(app, server, options) {
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = password ? (await scrypt(password, salt, 32)).toString('hex') : null;
     if (rooms.size >= maxRooms) return res.status(503).json({ error: 'Servidor com limite de salas atingido.' });
-    const room = { id: crypto.randomBytes(9).toString('base64url'), salt, password: hash, members: new Map(),
+    const room = { id: crypto.randomBytes(9).toString('base64url'), salt, password: hash, members: new Map(), realtimeSessions: new Map(),
       expiresAt: Date.now() + ttl * 1000, ownerId: null, messages: [], banned: new Set() };
     const result = joinResponse(room, req);
     room.ownerId = verify(result.token).memberId;
@@ -128,6 +133,53 @@ export function installStandalone(app, server, options) {
     }
     if (room.members.size >= maxMembers) return res.status(409).json({ error: 'Sala cheia.' });
     res.json(joinResponse(room, req));
+  }));
+  function realtimeAccess(req, res, next) {
+    if (!realtime) return res.status(503).json({ error: 'Cloudflare Realtime nao configurado.' });
+    try {
+      const token = req.get('authorization')?.replace(/^Bearer /, '');
+      const claims = verify(token);
+      const room = runtime(claims.roomId);
+      if (!room || room.expiresAt <= Date.now() || !validAccount(claims, room)) throw new Error();
+      req.realtimeRoom = room; req.realtimeMemberId = claims.memberId; next();
+    } catch { res.status(401).json({ error: 'Token da sala invalido ou expirado.' }); }
+  }
+  const ownRealtimeSession = req => {
+    const session = roomSession(req.realtimeRoom, req.realtimeMemberId);
+    return session?.sessionId === req.params.sessionId ? session : null;
+  };
+  const safeTracks = body => Array.isArray(body?.tracks) && body.tracks.length > 0 && body.tracks.length <= 8 && body.tracks.every(track =>
+    track && ['local', 'remote'].includes(track.location) && typeof track.trackName === 'string' && track.trackName.length > 0 && track.trackName.length <= 128);
+  app.post('/api/v2/realtime/sessions', realtimeAccess, wrap(async (req, res) => {
+    const created = await realtime.createSession();
+    if (typeof created.sessionId !== 'string' || !created.sessionId) throw httpError(502, 'Cloudflare Realtime nao retornou uma sessao valida.');
+    req.realtimeRoom.realtimeSessions.set(req.realtimeMemberId, { sessionId: created.sessionId, published: new Set() });
+    res.status(201).json({ sessionId: created.sessionId, iceServers: [{ urls: 'stun:stun.cloudflare.com:3478' }] });
+  }));
+  app.post('/api/v2/realtime/sessions/:sessionId/tracks', realtimeAccess, wrap(async (req, res) => {
+    const session = ownRealtimeSession(req);
+    if (!session) throw httpError(403, 'Sessao de midia nao pertence a este participante.');
+    if (!safeTracks(req.body)) throw httpError(400, 'Lista de tracks invalida.');
+    for (const track of req.body.tracks) if (track.location === 'remote') {
+      const source = [...req.realtimeRoom.realtimeSessions.values()].find(item => item.sessionId === track.sessionId);
+      if (!source?.published.has(track.trackName)) throw httpError(403, 'Track remota nao pertence a esta sala.');
+    }
+    const result = await realtime.addTracks(session.sessionId, req.body);
+    for (const track of req.body.tracks) if (track.location === 'local') session.published.add(track.trackName);
+    state(req.realtimeRoom); res.json(result);
+  }));
+  app.put('/api/v2/realtime/sessions/:sessionId/renegotiate', realtimeAccess, wrap(async (req, res) => {
+    const session = ownRealtimeSession(req);
+    if (!session) throw httpError(403, 'Sessao de midia nao pertence a este participante.');
+    res.json(await realtime.renegotiate(session.sessionId, req.body));
+  }));
+  app.put('/api/v2/realtime/sessions/:sessionId/tracks/close', realtimeAccess, wrap(async (req, res) => {
+    const session = ownRealtimeSession(req);
+    if (!session) throw httpError(403, 'Sessao de midia nao pertence a este participante.');
+    if (!safeTracks(req.body)) throw httpError(400, 'Lista de tracks invalida.');
+    const result = await realtime.closeTracks(session.sessionId, req.body);
+    for (const track of req.body.tracks) if (track.location === 'local') session.published.delete(track.trackName);
+    state(req.realtimeRoom); res.json(result);
   }));
   const upgrade = (req, socket, head) => {
     let url; try { url = new URL(req.url, 'http://localhost'); } catch { socket.destroy(); return; }
@@ -156,7 +208,7 @@ export function installStandalone(app, server, options) {
           room = runtime(claims.roomId);
           if (!room || room.expiresAt <= Date.now() || room.members.size >= maxMembers || room.members.has(claims.memberId) || room.banned.has(claims.memberId)) throw new Error();
           if (!validAccount(claims, room)) throw new Error();
-          member = { id: claims.memberId, ws, profile: profile(claims.profile), sharing: false,
+          member = { id: claims.memberId, ws, profile: profile(claims.profile), sharing: false, room,
             account: claims.account, accountSession: claims.accountSession, membershipVersion: claims.membershipVersion,
             owner: room.persistent ? saved.get(room.id).owner_id === claims.account : room.ownerId === claims.memberId };
           ws.accountSession = claims.accountSession;
@@ -205,6 +257,7 @@ export function installStandalone(app, server, options) {
       clearTimeout(timeout); clearTimeout(expires);
       if (!member || !room || room.members.get(member.id) !== member) return;
       room.members.delete(member.id);
+      room.realtimeSessions.delete(member.id);
       if (!room.persistent && member.owner && room.members.size) {
         const next = room.members.values().next().value; next.owner = true; room.ownerId = next.id;
       }
