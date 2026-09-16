@@ -1,6 +1,5 @@
 ﻿import { RoomClient, serverURL, invitation } from './room-client.mjs';
 const $ = id => document.getElementById(id);
-import { captureProcessAudio } from './process-audio.mjs';
 import { createPlayback } from './playback.mjs';
 // Mantém contas e salas permanentes implementadas, mas fora da interface por enquanto.
 const EMAIL_AUTH_UI_ENABLED = false;
@@ -32,6 +31,7 @@ if (window.desktop?.onUpdateState) {
   };
 }
 const storage = { get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }, set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} } };
+document.querySelectorAll('button:not([type])').forEach(button => { button.type = 'button'; });
 const colors = ['#111111', '#3a3a3a', '#6a6a6a', '#9a9a9a', '#c8c8c8', '#f2f2f2'];
 const avatars = ['initial', '🌙', '🎮', '🚀', '🐱', '🎧', '🌻'];
 const saved = storage.get('luxlab.profile', {});
@@ -42,8 +42,6 @@ let serverConfig = {}, accessToken = '', account = null, savedRooms = [], active
 let pendingInvite = new URLSearchParams(location.hash.slice(1)).get('invite') || '';
 if (pendingInvite) history.replaceState(null, '', location.pathname + location.search);
 const remote = new Map(), connections = new Map();
-let processAudio;
-function stopProcessAudio() { const audio = processAudio; processAudio = null; return audio?.stop(); }
 let toastTimer;
 function toast(text, error = false) { $('toast').textContent = text; $('toast').classList.toggle('error', error); $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').hidden = true; }, error ? 9000 : 4500); }
 function avatar(element, data) { element.style.backgroundColor = data.color; element.textContent = data.avatar === 'initial' ? data.name.slice(0, 1).toUpperCase() : data.avatar; }
@@ -105,15 +103,18 @@ function renderMembers() {
   const sharing = members.filter(m => m.sharing).length; $('stream-count').textContent = sharing ? `${sharing} ${sharing === 1 ? 'transmissão ao vivo' : 'transmissões ao vivo'}` : 'Nenhuma transmissão';
   const owner = members.find(m => m.id === client?.self)?.owner;
   for (const member of [...members].sort((a, b) => Number(b.sharing) - Number(a.sharing))) {
-    const row = document.createElement('div'); row.className = 'member'; row.classList.toggle('sharing', member.sharing); row.classList.toggle('watching', watched === member.id && member.sharing);
+    const row = document.createElement('div'); row.className = 'member'; row.classList.toggle('sharing', member.sharing); row.classList.toggle('watching', watched === member.id && member.sharing); row.tabIndex = 0; row.setAttribute('role', 'button'); row.setAttribute('aria-label', `Abrir áudio de ${member.profile.name}`); row.onclick = () => openParticipantAudio(member); row.onkeydown = event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openParticipantAudio(member); } };
     const icon = document.createElement('span'); icon.className = 'avatar'; avatar(icon, member.profile);
     const details = document.createElement('div'); details.className = 'member-details'; const name = document.createElement('span'); name.className = 'member-name'; name.textContent = `${member.owner ? '♛ ' : ''}${member.profile.name}${member.id === client?.self ? ' (você)' : ''}`;
     const status = document.createElement('small'); status.textContent = member.sharing ? '● Compartilhando tela' : '● Na sala'; details.append(name, status); row.append(icon, details);
-    if (member.sharing) { const watch = document.createElement('button'); watch.textContent = watched === member.id ? 'ASSISTINDO' : 'VER TELA'; watch.onclick = () => { showStream(member.id); renderMembers(); }; row.append(watch); }
-    if (owner && member.id !== client?.self) { const kick = document.createElement('button'); kick.className = 'kick'; kick.textContent = '×'; kick.title = `Remover ${member.profile.name}`; kick.setAttribute('aria-label', kick.title); kick.onclick = () => client.send({ type: 'kick', to: member.id }); row.append(kick); }
+    if (member.sharing) {
+      const watch = document.createElement('button'); watch.textContent = watched === member.id ? 'ASSISTINDO' : 'VER TELA'; watch.onclick = event => { event.stopPropagation(); showStream(member.id); renderMembers(); }; row.append(watch);
+    }
+    if (owner && member.id !== client?.self) { const kick = document.createElement('button'); kick.className = 'kick'; kick.textContent = '×'; kick.title = `Remover ${member.profile.name}`; kick.setAttribute('aria-label', kick.title); kick.onclick = event => { event.stopPropagation(); client.send({ type: 'kick', to: member.id }); }; row.append(kick); }
     $('members').append(row);
   }
 }
+function openParticipantAudio(member) { $('participant-audio-name').textContent = member.profile.name; $('participant-audio-status').textContent = member.sharing ? 'O controle individual desta transmissão será ativado em breve.' : 'O controle individual do áudio deste participante será ativado em breve.'; $('participant-audio-dialog').showModal(); }
 function selectAvailable() { if (!members.some(m => m.id === watched && m.sharing)) { const next = members.find(m => m.sharing && m.id !== client?.self) || members.find(m => m.sharing); showStream(next?.id); renderMembers(); } else { const member = members.find(m => m.id === watched); $('watching-label').textContent = watched === client?.self ? 'Sua tela · prévia sem retorno de áudio' : `Assistindo à tela de ${member.profile.name}`; } }
 function showStream(id) {
   watched = id; const stream = id === client?.self ? localStream : remote.get(id);
@@ -124,7 +125,7 @@ function showStream(id) {
 }
 function updateConnection() { const state = connections.get(watched); $('connection').textContent = !client ? '● Desconectado' : !watched || watched === client.self ? '● Sala conectada' : state === 'connected' ? '● Transmissão conectada' : state === 'failed' || state === 'disconnected' ? '● Transmissão sem conexão' : '● Conectando transmissão'; }
 let muted = false;
-function applyVolume() { $('player').volume = Number($('volume').value); $('player').muted = muted || watched === client?.self; $('mute').textContent = muted ? '♪ ×' : '♫'; $('volume-label').textContent = muted ? 'Som desativado' : `Volume ${Math.round(Number($('volume').value) * 100)}%`; }
+function applyVolume() { const value = Number($('volume').value); $('player').volume = value; $('player').muted = muted || watched === client?.self; $('mute').textContent = muted ? '♪ ×' : '♫'; $('volume-label').textContent = muted ? 'Som desativado' : `Volume ${Math.round(value * 100)}%`; }
 $('volume').oninput = applyVolume; $('mute').onclick = () => { muted = !muted; applyVolume(); }; $('play').onclick = () => playback.play();
 $('fullscreen').onclick = () => { const action = document.fullscreenElement ? document.exitFullscreen() : $('screen').requestFullscreen(); action.catch(() => toast('Tela cheia indisponível.', true)); };
 $('copy-invite').onclick = async () => {
@@ -151,41 +152,23 @@ async function openCapture() {
   selectedSource = null; $('sources').replaceChildren(); $('confirm-share').disabled = !!window.desktop;
   $('hardware-acceleration').checked = storage.get('luxlab.hardwareAcceleration', true);
   $('capture-dialog').showModal();
-  $('audio-process-field').hidden = !window.desktop;
+  $('audio-share-option').hidden = !!window.desktop;
   if (!window.desktop) { $('capture-help').textContent = 'Para transmitir som, escolha uma aba e compartilhe o áudio dela. Tela e janela serão compartilhadas sem áudio geral do PC.'; return; }
-  await refreshAudioProcesses();
   try { const sources = await window.desktop.getSources(); for (const source of sources) { const button = document.createElement('button'); button.className = 'source'; const img = document.createElement('img'); img.src = source.thumbnail; img.alt = ''; const title = document.createElement('span'); title.textContent = source.name; button.append(img, title); button.onclick = () => { selectedSource = source.id; for (const b of $('sources').children) b.classList.toggle('selected', b === button); $('confirm-share').disabled = false; }; $('sources').append(button); } if (!sources.length) toast('Nenhuma tela ou janela encontrada.', true); } catch { toast('Não foi possível listar as telas.', true); }
 }
 $('share').onclick = $('empty-share').onclick = () => openCapture().catch(e => toast(e.message, true));
-async function refreshAudioProcesses() {
-  $('audio-process').replaceChildren(new Option('Selecione o jogo ou player', ''));
-  try {
-    const processes = await window.desktop.getAudioProcesses();
-    for (const item of processes) $('audio-process').append(new Option(`${item.name} (${item.pid})`, String(item.pid)));
-    $('audio-process-help').textContent = processes.length ? 'Somente o aplicativo escolhido será transmitido. Não escolha o app da call. Se a call estiver no mesmo navegador do vídeo, ela também pode entrar; use um player ou navegador separado.' : 'Inicie o som no jogo ou player e clique em Atualizar aplicativos.';
-  } catch { $('audio-process-help').textContent = 'Áudio por aplicativo indisponível neste Windows. Desmarque a opção de áudio para compartilhar apenas a tela.'; }
-}
-$('refresh-audio-processes').onclick = () => refreshAudioProcesses();
 $('confirm-share').onclick = async () => {
   if (captureBusy || !client) return; captureBusy = true;
   const run = ++captureGeneration; const current = client; $('confirm-share').disabled = true;
   let captured;
-  let pendingAudio;
   try {
     storage.set('luxlab.hardwareAcceleration', $('hardware-acceleration').checked);
     current.setHardwareAcceleration($('hardware-acceleration').checked);
-    if (window.desktop && $('system-audio').checked && !$('audio-process').value) throw new Error('Selecione o aplicativo cujo áudio deseja transmitir.');
     if (window.desktop) await window.desktop.selectSource(selectedSource);
-    captured = await navigator.mediaDevices.getDisplayMedia({ video: { height: { ideal: Number($('quality').value) }, frameRate: { ideal: 30, max: 30 } }, audio: !window.desktop && $('system-audio').checked ? { restrictOwnAudio: true, suppressLocalAudioPlayback: false } : false, systemAudio: 'exclude', windowAudio: 'exclude' });
+    captured = await navigator.mediaDevices.getDisplayMedia({ video: { height: { ideal: Number($('quality').value) }, frameRate: { ideal: 30, max: 30 } }, audio: window.desktop || $('system-audio').checked ? { restrictOwnAudio: true, suppressLocalAudioPlayback: false } : false, systemAudio: 'exclude', windowAudio: 'exclude' });
     // Some browsers ignore the hints. Only accept browser-tab audio.
     if (!window.desktop && captured.getVideoTracks()[0]?.getSettings().displaySurface !== 'browser') {
       for (const track of captured.getAudioTracks()) { captured.removeTrack(track); track.stop(); }
-    }
-    if (window.desktop && $('system-audio').checked) {
-      pendingAudio = await captureProcessAudio(window.desktop, Number($('audio-process').value));
-      if (run !== captureGeneration || current !== client || current.closed) { await pendingAudio.stop(); captured.getTracks().forEach(t => t.stop()); return; }
-      for (const track of pendingAudio.stream.getAudioTracks()) captured.addTrack(track);
-      processAudio = pendingAudio;
     }
     if (run !== captureGeneration || current !== client || client.closed) { captured.getTracks().forEach(t => t.stop()); return; }
     localStream = captured; captured.getVideoTracks()[0].onended = () => { stopSharing().catch(() => {}); };
@@ -193,13 +176,13 @@ $('confirm-share').onclick = async () => {
     if (run !== captureGeneration || current !== client || current.closed) { captured.getTracks().forEach(t => t.stop()); return; }
     $('capture-dialog').close(); $('share').textContent = '■ Parar compartilhamento'; $('share').classList.add('danger');
     $('capture-status').textContent = captured.getAudioTracks().length ? '● Você está compartilhando tela e áudio do aplicativo ou aba selecionada.' : '● Você está compartilhando a tela, sem áudio.';
-    if ($('system-audio').checked && !captured.getAudioTracks().length) toast('Compartilhando sem áudio. No navegador, selecione uma aba com som. No Windows, selecione o aplicativo de áudio.');
+    if (!window.desktop && $('system-audio').checked && !captured.getAudioTracks().length) toast('Compartilhando sem áudio. No navegador, selecione uma aba com som.');
     if (!watched) { showStream(client.self); renderMembers(); }
-  } catch (e) { captured?.getTracks().forEach(t => t.stop()); await pendingAudio?.stop(); if (processAudio === pendingAudio) processAudio = null; localStream = null; await current.setStream(null).catch(() => {}); toast(e.name === 'NotAllowedError' ? 'Compartilhamento cancelado ou não autorizado.' : e.message, true); }
+  } catch (e) { captured?.getTracks().forEach(t => t.stop()); localStream = null; await current.setStream(null).catch(() => {}); toast(e.name === 'NotAllowedError' ? 'Compartilhamento cancelado ou não autorizado.' : e.message, true); }
   finally { captureBusy = false; $('confirm-share').disabled = false; }
 };
-async function stopSharing() { captureGeneration++; await stopProcessAudio(); const stream = localStream; localStream = null; stream?.getTracks().forEach(t => t.stop()); await client?.setStream(null).catch(() => {}); $('share').textContent = '▣ Compartilhar tela'; $('share').classList.remove('danger'); $('capture-status').textContent = 'Sua tela não está sendo compartilhada.'; if (watched === client?.self) showStream(); }
-function leave() { captureGeneration++; stopProcessAudio(); localStream?.getTracks().forEach(t => t.stop()); localStream = null; client?.close(); client = null; session = null; activeSavedRoom = null; activeSavedInvite = null; members = []; remote.clear(); connections.clear(); showStream(); $('room').hidden = true; $('home').hidden = false; $('copy-invite').hidden = false; $('share').textContent = '▣ Compartilhar tela'; $('share').classList.remove('danger'); $('capture-status').textContent = 'Sua tela não está sendo compartilhada.'; for (const d of document.querySelectorAll('dialog[open]')) d.close(); document.title = 'Luxlab — Sua sala, sua companhia'; if (location.protocol !== 'app:') history.replaceState(null, '', '/'); }
+async function stopSharing() { captureGeneration++; const stream = localStream; localStream = null; stream?.getTracks().forEach(t => t.stop()); await client?.setStream(null).catch(() => {}); $('share').textContent = '▣ Compartilhar tela'; $('share').classList.remove('danger'); $('capture-status').textContent = 'Sua tela não está sendo compartilhada.'; if (watched === client?.self) showStream(); }
+function leave() { captureGeneration++; localStream?.getTracks().forEach(t => t.stop()); localStream = null; client?.close(); client = null; session = null; activeSavedRoom = null; activeSavedInvite = null; members = []; remote.clear(); connections.clear(); showStream(); $('room').hidden = true; $('home').hidden = false; $('copy-invite').hidden = false; $('share').textContent = '▣ Compartilhar tela'; $('share').classList.remove('danger'); $('capture-status').textContent = 'Sua tela não está sendo compartilhada.'; for (const d of document.querySelectorAll('dialog[open]')) d.close(); document.title = 'Luxlab — Sua sala, sua companhia'; if (location.protocol !== 'app:') history.replaceState(null, '', '/'); }
 $('leave').onclick = leave; window.addEventListener('beforeunload', leave);
 document.querySelector('.room-brand').onclick = event => { event.preventDefault(); leave(); };
 async function outputs() { const selected = $('speakers').value; $('speakers').replaceChildren(new Option('Padrão do sistema', '')); const devices = await navigator.mediaDevices.enumerateDevices(); for (const device of devices.filter(d => d.kind === 'audiooutput' && d.deviceId && d.deviceId !== 'default')) $('speakers').append(new Option(device.label || 'Saída de áudio', device.deviceId)); if ([...$('speakers').options].some(o => o.value === selected)) $('speakers').value = selected; }

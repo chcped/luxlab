@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, KeyboardAvoidingView, Modal, NativeModules, PanResponder, Platform, ScrollView, Share, StatusBar, StyleSheet, Text as RNText, TextInput as RNTextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, BackHandler, Image, KeyboardAvoidingView, Modal, NativeModules, PanResponder, Platform, ScrollView, Share, StatusBar, StyleSheet, Text as RNText, TextInput as RNTextInput, TouchableOpacity, useWindowDimensions, View } from 'react-native';
 import type { TextInputProps, TextProps } from 'react-native';
 import { FONT_DISPLAY, FONT_UI } from './src/fonts';
 
@@ -33,7 +33,7 @@ function LuxlabApp() {
   const [sheetExpanded, setSheetExpanded] = useState(false); const [selectedMember, setSelectedMember] = useState<Member>();
   const [memberVolumes, setMemberVolumes] = useState<Record<string, number>>({}); const [confirmLeave, setConfirmLeave] = useState(false);
   const [name, setName] = useState('Visitante'); const [roomCode, setRoomCode] = useState(''); const [room, setRoom] = useState<RoomSession>();
-  const [members, setMembers] = useState<Member[]>([]); const [remote, setRemote] = useState<MediaStream>();
+  const [members, setMembers] = useState<Member[]>([]); const [remote, setRemote] = useState<MediaStream>(); const [selectedStreamId, setSelectedStreamId] = useState<string>();
   const [shareQuality, setShareQuality] = useState<ShareQuality>(DEFAULT_SHARE_QUALITY);
   const [shareBusy, setShareBusy] = useState(false);
   const shareBusyRef = useRef(false);
@@ -74,6 +74,15 @@ function LuxlabApp() {
     return disconnect;
   }, []);
 
+  useEffect(() => {
+    if (!room) return;
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      setConfirmLeave(true);
+      return true;
+    });
+    return () => handler.remove();
+  }, [room]);
+
   function showError(error: unknown) { setDialog({ title: 'Algo nao saiu como esperado', message: error instanceof Error ? error.message : 'Ocorreu um erro inesperado.' }); }
   function disconnect() { socket.current?.close(); media.current?.close(); AudioOutput?.reset(); socket.current = undefined; media.current = undefined; }
 
@@ -92,7 +101,9 @@ function LuxlabApp() {
       setRoom(session); setRoomCode(session.roomId);
       const client = media.current = new RoomMediaClient(session.iceServers || [], session.iceTransportPolicy || 'all', (memberId, stream) => {
         if (stream) remoteStreams.current.set(memberId, stream); else remoteStreams.current.delete(memberId);
-        setRemote(stream || [...remoteStreams.current.values()][0]);
+        if (selectedStreamId === memberId) {
+          setRemote(stream);
+        }
       }, message => socket.current?.send(JSON.stringify(message)));
       const ws = socket.current = new WebSocket(new URL('/ws', server).toString().replace(/^http/, 'ws'));
       ws.onopen = () => ws.send(JSON.stringify({ type: 'join', token: session.token }));
@@ -121,6 +132,7 @@ function LuxlabApp() {
       if (client !== media.current) { stream.getTracks().forEach(track => track.stop()); return; }
       try { await client.publish(stream); } catch (error) { await client.stopPublishing(); throw error; }
       socket.current?.send(JSON.stringify({ type: 'sharing', active: true })); setSharing(true);
+      if (!stream.getAudioTracks().length) setDialog({ title: 'Audio da transmissao indisponivel', message: 'O Android autorizou apenas a imagem. Verifique se o aparelho e o aplicativo permitem capturar audio interno.' });
     } catch (error) { showError(error); } finally { shareBusyRef.current = false; setShareBusy(false); }
   }
 
@@ -137,7 +149,11 @@ function LuxlabApp() {
   }
 
   function resetZoom() { videoScaleRef.current = 1; setVideoScale(1); }
-  function leaveRoom() { disconnect(); remoteStreams.current.clear(); setRoom(undefined); setMembers([]); setRemote(undefined); setSharing(false); setMediaReady(false); setFullscreen(false); setSpeakerEnabled(true); resetZoom(); self.current = undefined; }
+  function selectStream(memberId?: string) {
+    setSelectedStreamId(memberId);
+    setRemote(memberId ? remoteStreams.current.get(memberId) : undefined);
+  }
+  function leaveRoom() { disconnect(); remoteStreams.current.clear(); setRoom(undefined); setMembers([]); setRemote(undefined); setSelectedStreamId(undefined); setSharing(false); setMediaReady(false); setFullscreen(false); setSpeakerEnabled(true); resetZoom(); self.current = undefined; }
   function setTransmissionVolume(value: number) {
     setViewerVolume(value);
     remote?.getAudioTracks().forEach(track => track._setVolume(value / 100));
@@ -153,6 +169,8 @@ function LuxlabApp() {
   }
   const landscape = viewport.width > viewport.height;
   const safeStyle = { paddingLeft: Math.max(insets.left, 20), paddingRight: Math.max(insets.right, 20), paddingTop: Math.max(insets.top, 14), paddingBottom: Math.max(insets.bottom, 14) };
+  const activeSharingMembers = members.filter(member => member.sharing && member.id !== self.current);
+  const previewMember = activeSharingMembers.find(member => member.id === selectedStreamId) ?? activeSharingMembers[0];
 
   if (!room) return <View style={[styles.page, safeStyle]}>
     <StatusBar barStyle="light-content" />
@@ -185,16 +203,26 @@ function LuxlabApp() {
       <View style={styles.roomActions}><View style={styles.codePill}><Text style={styles.codeLabel}>SALA</Text><Text numberOfLines={1} style={styles.code}>{room.roomId}</Text></View><TouchableOpacity accessibilityLabel="Sair da sala" style={styles.smallIconButton} onPress={leaveRoom}><Text style={styles.leaveIcon}>×</Text></TouchableOpacity></View>
     </View>}
     <View style={[styles.roomBody, landscape && styles.roomBodyLandscape]}>
-    <View style={[styles.stage, fullscreen && styles.fullscreenStage]} {...videoResponder.panHandlers}>{remote ? <><RTCView key={remote.id} streamURL={remote.toURL()} style={[styles.video, { transform: [{ scale: videoScale }] }]} objectFit="contain" /><View style={[styles.videoTools, fullscreen && { top: Math.max(insets.top, 12), right: Math.max(insets.right, 12) }]}><TouchableOpacity style={styles.videoTool} onPress={resetZoom}><Text style={styles.videoToolText}>{Math.round(videoScale * 100)}%</Text></TouchableOpacity><TouchableOpacity style={styles.videoTool} onPress={() => setFullscreen(value => !value)}><Text style={styles.videoToolText}>{fullscreen ? '⊠ Sair' : '⛶ Tela cheia'}</Text></TouchableOpacity></View></> : <View style={styles.emptyState}><Text style={styles.emptyIcon}>▣</Text><Text display style={styles.emptyTitle}>Aguardando transmissao</Text><Text style={styles.empty}>Quando alguem compartilhar a tela, ela aparecera aqui.</Text></View>}</View>
+    <View style={[styles.stage, fullscreen && styles.fullscreenStage]} {...videoResponder.panHandlers}>{remote ? <><RTCView key={remote.id} streamURL={remote.toURL()} style={[styles.video, { transform: [{ scale: videoScale }] }]} objectFit="contain" /><View style={[styles.videoTools, fullscreen && { top: Math.max(insets.top, 12), right: Math.max(insets.right, 12) }]}><TouchableOpacity style={styles.videoTool} onPress={resetZoom}><Text style={styles.videoToolText}>{Math.round(videoScale * 100)}%</Text></TouchableOpacity><TouchableOpacity style={styles.videoTool} onPress={() => setFullscreen(value => !value)}><Text style={styles.videoToolText}>{fullscreen ? '⊠ Sair' : '⛶ Tela cheia'}</Text></TouchableOpacity></View></> : <View style={[styles.emptyState, activeSharingMembers.length > 0 && styles.previewState]}>
+        <View style={[styles.previewGlow, activeSharingMembers.length > 0 && styles.previewGlowVisible]} />
+        <Text style={styles.previewEye}>◉</Text>
+        <Text display style={styles.emptyTitle}>{activeSharingMembers.length > 0 ? 'Selecione uma transmissao' : 'Aguardando transmissao'}</Text>
+        <Text style={styles.empty}>{activeSharingMembers.length > 0 ? 'Toque em uma tela ativa para assistir. A primeira opção não entra automaticamente.' : 'Quando alguem compartilhar a tela, ela aparecera aqui.'}</Text>
+        {activeSharingMembers.length > 0 && (
+          <TouchableOpacity style={styles.previewCallout} onPress={() => previewMember && selectStream(previewMember.id)}>
+            <Text style={styles.previewCalloutText}>{previewMember?.profile.name || 'Tela em andamento'}</Text>
+          </TouchableOpacity>
+        )}
+      </View>}</View>
     {!fullscreen && <ScrollView style={[styles.controlPanelScroll, landscape && styles.controlPanelLandscape]} contentContainerStyle={styles.controlPanel} nestedScrollEnabled>
       <View {...sheetResponder.panHandlers}><TouchableOpacity accessibilityLabel={sheetExpanded ? 'Recolher menu' : 'Expandir menu'} style={styles.sheetHandleArea} onPress={() => setSheetExpanded(value => !value)}><View style={styles.sheetHandle} /><Text style={styles.sheetHint}>{sheetExpanded ? 'Click aqui!' : 'Clik aqui!'}</Text></TouchableOpacity></View>
       <View style={styles.participantsRow}><View style={styles.participantNames}><Text style={styles.participantsTitle}>{members.length} participante(s)</Text><Text numberOfLines={1} style={styles.people}>{members.map(member => member.profile.name).join(', ') || 'Aguardando participantes'}</Text></View><View style={styles.avatar}><Text style={styles.avatarText}>{members.length}</Text></View></View>
       {sheetExpanded && <ScrollView style={styles.memberList} contentContainerStyle={styles.memberListContent} nestedScrollEnabled>
         <Text style={styles.sectionLabel}>NA SALA</Text>
-        {members.map(member => <TouchableOpacity key={member.id} style={styles.memberRow} delayLongPress={350} onLongPress={() => setSelectedMember(member)}>
-          <View style={styles.memberAvatar}><Text style={styles.memberAvatarText}>{(member.profile.name || 'V').slice(0, 1).toUpperCase()}</Text></View>
-          <View style={styles.memberInfo}><Text style={styles.memberName}>{member.profile.name}{member.id === self.current ? ' (voce)' : ''}</Text><Text style={styles.memberState}>{member.sharing ? 'Compartilhando tela' : 'Na sala'} · Segure para ajustar o volume</Text></View>
-          <Text style={styles.memberVolume}>{memberVolumes[member.id] ?? 100}%</Text>
+        {members.map(member => <TouchableOpacity key={member.id} style={[styles.memberRow, member.sharing && selectedStreamId === member.id && styles.memberSelected]} delayLongPress={350} onPress={() => member.sharing && selectStream(member.id)} onLongPress={() => setSelectedMember(member)}>
+          <View style={[styles.memberAvatar, member.sharing && styles.memberAvatarActive]}><Text style={styles.memberAvatarText}>{(member.profile.name || 'V').slice(0, 1).toUpperCase()}</Text></View>
+          <View style={styles.memberInfo}><Text style={styles.memberName}>{member.profile.name}{member.id === self.current ? ' (voce)' : ''}</Text><Text style={styles.memberState}>{member.sharing ? 'Compartilhando tela' : 'Na sala'} · {member.sharing ? 'Toque para assistir' : 'Segure para ajustar o volume'}</Text></View>
+          <Text style={styles.memberVolume}>{member.sharing ? '👁' : `${memberVolumes[member.id] ?? 100}%`}</Text>
         </TouchableOpacity>)}
       </ScrollView>}
       <TouchableOpacity style={styles.inviteButton} onPress={shareInvite}><Text style={styles.inviteButtonText}>↗  Convidar pessoas</Text></TouchableOpacity>
@@ -251,9 +279,9 @@ const styles = StyleSheet.create({
   roomHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, liveStatus: { color: '#c8c8c8', fontSize: 9, fontWeight: '800', marginTop: 2, letterSpacing: 1 }, roomActions: { flexDirection: 'row', alignItems: 'center', gap: 8, maxWidth: '70%' }, codePill: { backgroundColor: '#161616', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 7, alignItems: 'flex-end', flexShrink: 1 }, codeLabel: { color: '#8a8a8a', fontSize: 8, fontWeight: '800', letterSpacing: 1 }, code: { color: '#e8e8e8', fontSize: 12, letterSpacing: 2 },
   smallIconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center', borderRadius: 11, backgroundColor: '#1a1a1a' }, leaveIcon: { color: '#e8e8e8', fontSize: 25, lineHeight: 27 },
   roomBody: { flex: 1, minHeight: 0, gap: 14 }, roomBodyLandscape: { flexDirection: 'row' }, controlPanelScroll: { flexGrow: 0, flexShrink: 1, maxHeight: '60%' }, controlPanelLandscape: { width: 300, maxHeight: '100%' },
-  stage: { flex: 1, minHeight: 0, backgroundColor: '#0a0a0a', borderRadius: 20, overflow: 'hidden', borderColor: '#1a1a1a', borderWidth: 1, justifyContent: 'center' }, fullscreenStage: { borderRadius: 0, borderWidth: 0 }, video: { flex: 1 }, videoTools: { position: 'absolute', right: 12, top: 12, flexDirection: 'row', gap: 8 }, videoTool: { minHeight: 38, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.88)', borderWidth: 1, borderColor: '#3a3a3a' }, videoToolText: { color: '#f5f5f5', fontSize: 11, fontWeight: '800' }, emptyState: { padding: 30, alignItems: 'center' }, emptyIcon: { color: '#fff', fontSize: 32, marginBottom: 13 }, emptyTitle: { color: '#f5f5f5', fontWeight: '700', fontSize: 16 }, empty: { color: '#8a8a8a', textAlign: 'center', lineHeight: 20, marginTop: 7 },
+  stage: { flex: 1, minHeight: 0, backgroundColor: '#0a0a0a', borderRadius: 20, overflow: 'hidden', borderColor: '#1a1a1a', borderWidth: 1, justifyContent: 'center' }, fullscreenStage: { borderRadius: 0, borderWidth: 0 }, video: { flex: 1 }, videoTools: { position: 'absolute', right: 12, top: 12, flexDirection: 'row', gap: 8 }, videoTool: { minHeight: 38, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', borderRadius: 10, backgroundColor: 'rgba(0,0,0,0.88)', borderWidth: 1, borderColor: '#3a3a3a' }, videoToolText: { color: '#f5f5f5', fontSize: 11, fontWeight: '800' }, emptyState: { flex: 1, padding: 30, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0a0a0a' }, previewState: { borderWidth: 1, borderColor: '#2f2f2f' }, previewGlow: { position: 'absolute', inset: 0, backgroundColor: 'rgba(255,255,255,0.06)', opacity: 0 }, previewGlowVisible: { opacity: 1 }, previewEye: { color: '#f5f5f5', fontSize: 32, marginBottom: 12, opacity: 0.9 }, emptyIcon: { color: '#fff', fontSize: 32, marginBottom: 13 }, emptyTitle: { color: '#f5f5f5', fontWeight: '700', fontSize: 16 }, empty: { color: '#8a8a8a', textAlign: 'center', lineHeight: 20, marginTop: 7 }, previewCallout: { marginTop: 18, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 14, borderWidth: 1, borderColor: '#3a3a3a', backgroundColor: 'rgba(255,255,255,0.05)' }, previewCalloutText: { color: '#f5f5f5', fontWeight: '700' },
   controlPanel: { backgroundColor: '#121212', borderRadius: 18, paddingHorizontal: 14, paddingBottom: 14, borderWidth: 1, borderColor: '#2e2e2e', gap: 12 }, controlPanelExpanded: { maxHeight: '68%' }, sheetHandleArea: { alignItems: 'center', paddingTop: 9, paddingBottom: 2 }, sheetHandle: { width: 46, height: 4, borderRadius: 2, backgroundColor: '#3a3a3a' }, sheetHint: { color: '#8a8a8a', fontSize: 9, marginTop: 5 }, participantsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, participantNames: { flex: 1, paddingRight: 10 }, participantsTitle: { color: '#f5f5f5', fontSize: 13, fontWeight: '700' }, people: { color: '#8a8a8a', fontSize: 11, marginTop: 3 }, avatar: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2a2a' }, avatarText: { color: '#f5f5f5', fontWeight: '800', fontSize: 12 },
-  memberList: { maxHeight: 220 }, memberListContent: { gap: 8 }, sectionLabel: { color: '#8a8a8a', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginVertical: 3 }, memberRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', backgroundColor: '#161616', borderRadius: 13, padding: 10, borderWidth: 1, borderColor: '#2e2e2e' }, memberAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2a2a' }, memberAvatarLarge: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2a2a' }, memberAvatarText: { color: '#fff', fontWeight: '900', fontSize: 16 }, memberInfo: { flex: 1, paddingHorizontal: 10 }, memberName: { color: '#f5f5f5', fontWeight: '700', fontSize: 13 }, memberState: { color: '#8a8a8a', fontSize: 9, marginTop: 3 }, memberVolume: { color: '#fff', fontSize: 11, fontWeight: '800' },
+  memberList: { maxHeight: 220 }, memberListContent: { gap: 8 }, sectionLabel: { color: '#8a8a8a', fontSize: 9, fontWeight: '800', letterSpacing: 1.5, marginVertical: 3 }, memberRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', backgroundColor: '#161616', borderRadius: 13, padding: 10, borderWidth: 1, borderColor: '#2e2e2e' }, memberSelected: { borderColor: '#f5f5f5', backgroundColor: '#202020' }, memberAvatar: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2a2a' }, memberAvatarActive: { borderWidth: 1, borderColor: '#f5f5f5' }, memberAvatarLarge: { width: 58, height: 58, borderRadius: 29, alignItems: 'center', justifyContent: 'center', backgroundColor: '#2a2a2a' }, memberAvatarText: { color: '#fff', fontWeight: '900', fontSize: 16 }, memberInfo: { flex: 1, paddingHorizontal: 10 }, memberName: { color: '#f5f5f5', fontWeight: '700', fontSize: 13 }, memberState: { color: '#8a8a8a', fontSize: 9, marginTop: 3 }, memberVolume: { color: '#fff', fontSize: 11, fontWeight: '800' },
   inviteButton: { minHeight: 46, borderRadius: 12, borderWidth: 1, borderColor: '#fff', backgroundColor: '#111', alignItems: 'center', justifyContent: 'center' }, inviteButtonText: { color: '#fff', fontWeight: '800' },
   qualityPanel: { gap: 8 }, qualityOptions: { flexDirection: 'row', gap: 8 }, qualityOption: { flex: 1, paddingVertical: 10, alignItems: 'center', borderRadius: 10, borderWidth: 1, borderColor: '#2e2e2e', backgroundColor: '#161616' }, qualitySelected: { borderColor: '#fff', backgroundColor: '#fff' },
   transmissionVolume: { backgroundColor: '#161616', borderRadius: 12, paddingHorizontal: 12, paddingTop: 10, paddingBottom: 10 }, transmissionVolumeHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }, transmissionVolumeTitle: { color: '#e8e8e8', fontSize: 11, fontWeight: '700' }, wideSlider: { width: '100%', height: 38 },

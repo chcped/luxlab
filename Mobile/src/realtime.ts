@@ -110,7 +110,7 @@ export class RoomMediaClient {
     this.quality = { ...quality };
     const screen = Dimensions.get('screen');
     const scale = captureScale(Math.min(screen.width, screen.height) * PixelRatio.get(), quality.resolution);
-    const stream = await mediaDevices.getDisplayMedia({ android: { createConfigForDefaultDisplay: true, resolutionScale: scale } });
+    const stream = await mediaDevices.getDisplayMedia({ video: true, audio: true, android: { createConfigForDefaultDisplay: true, resolutionScale: scale } });
     if (this.closed) {
       stream.getTracks().forEach(track => track.stop());
       throw new Error('A sala foi encerrada durante a autorizacao.');
@@ -124,6 +124,8 @@ export class RoomMediaClient {
     await Promise.all([...this.peers.values()].flatMap(peer => ['video', 'audio'].map(async kind => {
       const sender = peer.senders[kind];
       if (!sender) return;
+      const transceiver = peer.pc.getTransceivers().find(item => item.sender === sender);
+      if (transceiver) transceiver.direction = 'sendrecv';
       await sender.replaceTrack(stream.getTracks().find(track => track.kind === kind) || null);
       if (kind === 'video') await this.tuneVideoSender(sender);
     })));
@@ -168,7 +170,7 @@ export class RoomMediaClient {
     };
     if (peer.initiator) for (const kind of ['video', 'audio'] as const) {
       const track = this.localStream?.getTracks().find(item => item.kind === kind);
-      const transceiver = pc.addTransceiver(track || kind, { direction: 'sendrecv', ...(track && this.localStream ? { streams: [this.localStream] } : {}) });
+      const transceiver = pc.addTransceiver(track || kind, { direction: track ? 'sendrecv' : 'recvonly', ...(track && this.localStream ? { streams: [this.localStream] } : {}) });
       peer.senders[kind] = transceiver.sender;
       if (kind === 'video') preferVideo(pc);
       if (kind === 'video' && track) await this.tuneVideoSender(transceiver.sender);

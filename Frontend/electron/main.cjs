@@ -88,7 +88,7 @@ if (primaryInstance) app.whenReady().then(async () => {
       const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
       const source = sources.find(item => item.id === id);
       if (!source) return callback({});
-      callback({ video: source });
+      callback({ video: source, audio: 'loopback' });
     } catch { callback({}); }
   });
   function createWindow() {
@@ -140,13 +140,13 @@ if (primaryInstance) app.whenReady().then(async () => {
     app, ipcMain, updater,
     getWindow: () => window, trusted, startupChecked: !process.argv.includes('--background')
   });
-  app.getFileIcon(process.execPath).then(icon => {
-    tray = new Tray(icon);
-    tray.setToolTip('Luxlab Desktop');
+  tray = new Tray(path.join(__dirname, '../icone.png'));
+  tray.setToolTip('P2P em segundo plano');
+  {
     const show = () => { window?.show(); window?.focus(); };
-    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Abrir Luxlab Desktop', click: show }, { label: 'Sair e encerrar captura', click: () => app.quit() }]));
+    tray.setContextMenu(Menu.buildFromTemplate([{ label: 'Abrir P2P', click: show }, { label: 'Sair e encerrar captura', click: () => app.quit() }]));
     tray.on('double-click', show);
-  }).catch(() => window?.show());
+  }
   app.on('activate', () => { if (!window) createWindow(); });
 });
 app.on('window-all-closed', () => { if (!booting) app.quit(); });
