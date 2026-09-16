@@ -8,6 +8,7 @@
     "ios": "react-native run-ios",
     "lint": "eslint .",
     "postinstall": "patch-package",
+    "release": "node scripts/release.cjs",
     "start": "react-native start",
     "test": "jest"
   },
