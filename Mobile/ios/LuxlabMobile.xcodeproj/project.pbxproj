@@ -11,6 +11,8 @@
 		13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 13B07FB51A68108700A75B9A /* Images.xcassets */; };
 		761780ED2CA45674006654EE /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 761780EC2CA45674006654EE /* AppDelegate.swift */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
+		A11F01B0C0DE0001F0A70001 /* ArchivoBlack-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A11F01B0C0DE0001F0A70011 /* ArchivoBlack-Regular.ttf */; };
+		A11F01B0C0DE0001F0A70002 /* UncialAntiqua-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A11F01B0C0DE0001F0A70012 /* UncialAntiqua-Regular.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -23,6 +25,8 @@
 		5DCACB8F33CDC322A6C60F78 /* libPods-LuxlabMobile.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-LuxlabMobile.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		761780EC2CA45674006654EE /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppDelegate.swift; path = LuxlabMobile/AppDelegate.swift; sourceTree = "<group>"; };
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = LuxlabMobile/LaunchScreen.storyboard; sourceTree = "<group>"; };
+		A11F01B0C0DE0001F0A70011 /* ArchivoBlack-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "ArchivoBlack-Regular.ttf"; path = "LuxlabMobile/ArchivoBlack-Regular.ttf"; sourceTree = "<group>"; };
+		A11F01B0C0DE0001F0A70012 /* UncialAntiqua-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; name = "UncialAntiqua-Regular.ttf"; path = "LuxlabMobile/UncialAntiqua-Regular.ttf"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -45,6 +49,8 @@
 				761780EC2CA45674006654EE /* AppDelegate.swift */,
 				13B07FB61A68108700A75B9A /* Info.plist */,
 				81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */,
+				A11F01B0C0DE0001F0A70011 /* ArchivoBlack-Regular.ttf */,
+				A11F01B0C0DE0001F0A70012 /* UncialAntiqua-Regular.ttf */,
 				13B07FB81A68108700A75B9A /* PrivacyInfo.xcprivacy */,
 			);
 			name = LuxlabMobile;
@@ -158,6 +164,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
+				A11F01B0C0DE0001F0A70001 /* ArchivoBlack-Regular.ttf in Resources */,
+				A11F01B0C0DE0001F0A70002 /* UncialAntiqua-Regular.ttf in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

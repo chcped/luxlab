@@ -58,7 +58,7 @@ if (primaryInstance) app.whenReady().then(async () => {
   });
   protocol.handle('app', request => {
     const url = new URL(request.url);
-    const files = ['/index.html', '/styles.css', '/app.js', '/room-client.mjs', '/playback.mjs', '/process-audio.mjs'];
+    const files = ['/index.html', '/styles.css', '/app.js', '/room-client.mjs', '/video-codecs.mjs', '/playback.mjs', '/process-audio.mjs', '/logo.png', '/favicon.png', '/fonts/ArchivoBlack-Regular.ttf', '/fonts/UncialAntiqua-Regular.ttf'];
     if (url.host !== 'desktop' || !files.includes(url.pathname)) return new Response('', { status: 404 });
     return net.fetch(pathToFileURL(path.join(__dirname, '../src', url.pathname.slice(1))).href);
   });
@@ -92,8 +92,8 @@ if (primaryInstance) app.whenReady().then(async () => {
     } catch { callback({}); }
   });
   function createWindow() {
-    window = new BrowserWindow({ width: 1280, height: 860, minWidth: 900, minHeight: 680, show: !process.argv.includes('--background'),
-      backgroundColor: '#101117', autoHideMenuBar: true, icon: path.join(__dirname, '../icone.png'),
+    window = new BrowserWindow({ width: 1280, height: 860, minWidth: 900, minHeight: 680, show: false,
+      backgroundColor: '#000000', autoHideMenuBar: true, icon: path.join(__dirname, '../icone.png'),
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false }
     });
     window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -109,19 +109,33 @@ if (primaryInstance) app.whenReady().then(async () => {
   const { updateMarker, checkStartup } = require('./startup-update.cjs');
   const marker = updateMarker(app);
   const skipCheck = marker.consume();
-  if (app.isPackaged && process.platform === 'win32' && !skipCheck && !process.argv.includes('--background')) {
-    splash = new BrowserWindow({ width: 440, height: 470, frame: false, resizable: false, show: false,
-      icon: path.join(__dirname, '../icone.png'), backgroundColor: '#030711',
+  const showSplash = !process.argv.includes('--background');
+  let splashShownAt = 0;
+  if (showSplash) {
+    splash = new BrowserWindow({ width: 520, height: 640, frame: false, resizable: false, show: false,
+      icon: path.join(__dirname, '../icone.png'), backgroundColor: '#000000',
       webPreferences: { preload: path.join(__dirname, 'splash-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true }
     });
     splash.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     splash.webContents.on('will-navigate', event => event.preventDefault());
     await splash.loadFile(path.join(__dirname, 'splash.html'));
     splash.show();
-    await checkStartup({ updater, marker, render: state => { if (!splash?.isDestroyed()) splash.webContents.send('splash:state', state); } });
+    splashShownAt = Date.now();
+    if (app.isPackaged && process.platform === 'win32' && !skipCheck) {
+      await checkStartup({ updater, marker, render: state => { if (!splash?.isDestroyed()) splash.webContents.send('splash:state', state); } });
+    }
   }
   createWindow();
-  splash?.destroy(); splash = null; booting = false;
+  const reveal = () => {
+    const wait = !splashShownAt || Date.now() - splashShownAt > 900 ? 0 : 900 - (Date.now() - splashShownAt);
+    setTimeout(() => {
+      if (window && !window.isDestroyed() && showSplash) window.show();
+      if (splash && !splash.isDestroyed()) splash.destroy();
+      splash = null;
+      booting = false;
+    }, wait);
+  };
+  window.once('ready-to-show', reveal);
   require('./updates.cjs').setupUpdates({
     app, ipcMain, updater,
     getWindow: () => window, trusted, startupChecked: !process.argv.includes('--background')

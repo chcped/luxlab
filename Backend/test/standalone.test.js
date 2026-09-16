@@ -44,7 +44,7 @@ test('convite, presença, compartilhamento, perfil, chat e isolamento entre sala
   owner.send({ type: 'sharing', active: true });
   assert.equal((await viewer.next('members', m => m.members.some(p => p.sharing))).members.find(m => m.id === self).sharing, true);
   viewer.send({ type: 'profile', profile: { name: '<script>alert(1)</script>', color: 'invalid', avatar: '🚀' } });
-  assert.equal((await owner.next('members', m => m.members.some(p => p.profile.avatar === '🚀'))).members.find(m => m.id === other).profile.color, '#7c6cff');
+  assert.equal((await owner.next('members', m => m.members.some(p => p.profile.avatar === '🚀'))).members.find(m => m.id === other).profile.color, '#111111');
   viewer.send({ type: 'chat', text: 'Olá!' }); assert.equal((await owner.next('chat')).message.text, 'Olá!');
   owner.send({ type: 'signal', to: other, payload: { test: 1 } }); assert.deepEqual((await viewer.next('signal')).payload, { test: 1 });
   const different = await api('/rooms'); const outsider = await connect(different.body.token); await outsider.next('joined');

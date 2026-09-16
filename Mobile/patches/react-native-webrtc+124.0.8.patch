@@ -1,0 +1,231 @@
+diff --git a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/ScreenCaptureController.java b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/ScreenCaptureController.java
+--- a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/ScreenCaptureController.java
++++ b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/ScreenCaptureController.java
+@@ -4,6 +4,8 @@
+ import android.content.Context;
+ import android.content.Intent;
+ import android.media.projection.MediaProjection;
++import android.os.Handler;
++import android.os.Looper;
+ import android.util.DisplayMetrics;
+ import android.util.Log;
+ import android.view.OrientationEventListener;
+@@ -25,8 +27,42 @@
+ 
+     private final Context context;
+ 
++    private volatile boolean ended;
++
++    private volatile int captureWidth;
++
++    private volatile int captureHeight;
++
++    private volatile int pendingWidth;
++
++    private volatile int pendingHeight;
++
++    private final Handler orientationHandler = new Handler(Looper.getMainLooper());
++
++    private final Runnable refreshCapture = () -> {
++        ThreadUtils.runOnExecutor(() -> {
++            final int width = pendingWidth;
++            final int height = pendingHeight;
++            if (ended || videoCapturer == null || width <= 0 || height <= 0
++                    || (width == captureWidth && height == captureHeight)) {
++                return;
++            }
++            try {
++                // Resize the existing projection; its permission token cannot be reused.
++                videoCapturer.changeCaptureFormat(width, height, DEFAULT_FPS);
++                captureWidth = targetWidth = actualWidth = width;
++                captureHeight = targetHeight = actualHeight = height;
++            } catch (RuntimeException ex) {
++                Log.e(TAG, "Failed to resize screen capture", ex);
++            }
++        });
++    };
++
+     public ScreenCaptureController(Context context, int width, int height, Intent mediaProjectionPermissionResultData, float resolutionScale) {
+         super((int)(width * resolutionScale), (int)(height * resolutionScale), DEFAULT_FPS);
++
++        this.captureWidth = (int)(width * resolutionScale);
++        this.captureHeight = (int)(height * resolutionScale);
+ 
+         this.mediaProjectionPermissionResultData = mediaProjectionPermissionResultData;
+ 
+@@ -39,16 +75,16 @@
+                 final int width = (int)(displayMetrics.widthPixels * resolutionScale);
+                 final int height = (int)(displayMetrics.heightPixels * resolutionScale);
+ 
+-                // Pivot to the executor thread because videoCapturer.changeCaptureFormat runs in the main
+-                // thread and may deadlock.
+-                ThreadUtils.runOnExecutor(() -> {
+-                    try {
+-                        videoCapturer.changeCaptureFormat(width, height, DEFAULT_FPS);
+-                    } catch (Exception ex) {
+-                        // We ignore exceptions here. The video capturer runs on its own
+-                        // thread and we cannot synchronize with it.
+-                    }
+-                });
++                // OrientationEventListener fires continuously. Reconfiguring the capturer for
++                // identical dimensions queues expensive format changes and can freeze projection.
++                if (ended || (width == pendingWidth && height == pendingHeight)) {
++                    return;
++                }
++
++                pendingWidth = width;
++                pendingHeight = height;
++                orientationHandler.removeCallbacks(refreshCapture);
++                orientationHandler.postDelayed(refreshCapture, 500);
+             }
+         };
+ 
+@@ -64,6 +100,9 @@
+ 
+     @Override
+     public void dispose() {
++        ended = true;
++        orientationHandler.removeCallbacks(refreshCapture);
++        orientationListener.disable();
+         MediaProjectionService.abort(context);
+         super.dispose();
+     }
+@@ -75,12 +114,17 @@
+                     @Override
+                     public void onStop() {
+                         Log.w(TAG, "Media projection stopped.");
++                        ended = true;
++                        orientationHandler.removeCallbacks(refreshCapture);
+                         orientationListener.disable();
+-                        stopCapture();
+-
+-                        if (capturerEventsListener != null) {
+-                            capturerEventsListener.onCapturerEnded();
+-                        }
++                        // The callback runs on the capture thread. Stop from the executor
++                        // to avoid waiting on that thread while holding the capturer lock.
++                        ThreadUtils.runOnExecutor(() -> {
++                            if (ScreenCaptureController.this.videoCapturer != null) stopCapture();
++                            if (capturerEventsListener != null) {
++                                capturerEventsListener.onCapturerEnded();
++                            }
++                        });
+                     }
+                 });
+ 
+diff --git a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/PeerConnectionObserver.java b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/PeerConnectionObserver.java
+--- a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/PeerConnectionObserver.java
++++ b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/PeerConnectionObserver.java
+@@ -38,6 +38,75 @@
+     private int transceiverNextId = 0;
+ 
+     private PeerConnection peerConnection;
++    private final android.os.Handler statsHandler = new android.os.Handler(android.os.Looper.getMainLooper());
++    private boolean statsClosed;
++    private final Runnable statsTick = () -> ThreadUtils.runOnExecutor(this::collectSendStats);
++
++    private void collectSendStats() {
++        if (statsClosed || peerConnection == null) return;
++        boolean sending = false;
++        for (RtpSender sender : peerConnection.getSenders()) {
++            MediaStreamTrack track = sender.track();
++            if (track != null && "video".equals(track.kind())
++                    && track.state() == MediaStreamTrack.State.LIVE) sending = true;
++        }
++        if (!sending) {
++            statsHandler.postDelayed(statsTick, 2000);
++            return;
++        }
++        final String state = peerConnection.connectionState().toString().toLowerCase(java.util.Locale.ROOT);
++        peerConnection.getStats(report -> ThreadUtils.runOnExecutor(() -> {
++            if (statsClosed) return;
++            try {
++                for (org.webrtc.RTCStats stat : report.getStatsMap().values()) {
++                    Map<String, Object> m = stat.getMembers();
++                    if (!"outbound-rtp".equals(stat.getType())
++                            || !"video".equals(m.get("kind") != null ? m.get("kind") : m.get("mediaType"))) continue;
++                    org.json.JSONObject sample = new org.json.JSONObject();
++                    sample.put("peer", "pc-" + id);
++                    sample.put("state", state);
++                    sample.put("id", stat.getId());
++                    sample.put("timestamp", stat.getTimestampUs() / 1000.0);
++                    String[] fields = {"bytesSent", "framesEncoded", "frameWidth", "frameHeight", "qualityLimitationReason", "totalEncodeTime", "totalPacketSendDelay", "packetsSent", "framesSent", "encoderImplementation", "targetBitrate"};
++                    for (String field : fields) sample.put(field, m.getOrDefault(field, org.json.JSONObject.NULL));
++                    org.webrtc.RTCStats codec = report.getStatsMap().get(m.get("codecId"));
++                    if (codec != null) {
++                        sample.put("codec", codec.getMembers().get("mimeType"));
++                        sample.put("fmtp", codec.getMembers().get("sdpFmtpLine"));
++                    }
++                    org.webrtc.RTCStats source = report.getStatsMap().get(m.get("mediaSourceId"));
++                    if (source != null) sample.put("sourceFrames", source.getMembers().get("frames"));
++                    org.webrtc.RTCStats transport = report.getStatsMap().get(m.get("transportId"));
++                    org.webrtc.RTCStats pair = transport == null ? null : report.getStatsMap().get(transport.getMembers().get("selectedCandidatePairId"));
++                    if (pair != null) {
++                        sample.put("availableBitrate", pair.getMembers().get("availableOutgoingBitrate"));
++                        org.webrtc.RTCStats candidate = report.getStatsMap().get(pair.getMembers().get("localCandidateId"));
++                        if (candidate != null) {
++                            sample.put("route", candidate.getMembers().get("candidateType"));
++                            sample.put("protocol", candidate.getMembers().get("protocol"));
++                            sample.put("relayProtocol", candidate.getMembers().get("relayProtocol"));
++                        }
++                    }
++                    org.webrtc.RTCStats remote = report.getStatsMap().get(m.get("remoteId"));
++                    if (remote != null) {
++                        sample.put("roundTripTime", remote.getMembers().get("roundTripTime"));
++                        sample.put("packetsLost", remote.getMembers().get("packetsLost"));
++                    }
++                    Log.i("LuxlabStats", "[LuxlabSendStats] " + sample);
++                }
++            } catch (Exception error) {
++                Log.w("LuxlabStats", "Unable to collect outbound statistics", error);
++            } finally {
++                if (!statsClosed) statsHandler.postDelayed(statsTick, 2000);
++            }
++        }));
++    }
++
++    private void stopSendStats() {
++        statsClosed = true;
++        statsHandler.removeCallbacks(statsTick);
++    }
++
+     final Map<String, String> remoteStreamIds; // Stream ID -> React tag
+     final Map<String, MediaStream> remoteStreams; // React tag -> MediaStream
+     final Map<String, MediaStreamTrack> remoteTracks;
+@@ -60,15 +129,21 @@
+ 
+     void setPeerConnection(PeerConnection peerConnection) {
+         this.peerConnection = peerConnection;
++        if (webRTCModule.isAppDebuggable()) {
++            statsHandler.removeCallbacks(statsTick);
++            statsHandler.postDelayed(statsTick, 2000);
++        }
+     }
+ 
+     void close() {
++        stopSendStats();
+         Log.d(TAG, "PeerConnection.close() for " + id);
+ 
+         peerConnection.close();
+     }
+ 
+     void dispose() {
++        stopSendStats();
+         Log.d(TAG, "PeerConnection.dispose() for " + id);
+ 
+         // Remove video track adapters
+diff --git a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
+--- a/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
++++ b/node_modules/react-native-webrtc/android/src/main/java/com/oney/WebRTCModule/WebRTCModule.java
+@@ -59,6 +59,11 @@
+ 
+     private final GetUserMediaImpl getUserMediaImpl;
+ 
++    boolean isAppDebuggable() {
++        return (getReactApplicationContext().getApplicationInfo().flags
++                & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
++    }
++
+     public WebRTCModule(ReactApplicationContext reactContext) {
+         super(reactContext);
+ 

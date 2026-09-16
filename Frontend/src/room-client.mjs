@@ -1,9 +1,17 @@
+import { applyVideoCodecPreferences } from './video-codecs.mjs';
+
 // One connection per participant. Stable transceivers allow starting/stopping
 // screen sharing without recreating connections or requesting microphone input.
+
 export class RoomClient {
   constructor(base, session, callbacks = {}) {
     this.base = base; this.session = session; this.callbacks = callbacks;
     this.peers = new Map(); this.stream = null; this.closed = false;
+    this.hardwareAcceleration = true;
+  }
+  setHardwareAcceleration(enabled) {
+    this.hardwareAcceleration = !!enabled;
+    for (const peer of this.peers.values()) applyVideoCodecPreferences(peer.pc, this.hardwareAcceleration);
   }
   connect() {
     return new Promise((resolve, reject) => {
@@ -35,7 +43,7 @@ export class RoomClient {
   }
   send(message) { if (!this.closed && this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message)); }
   async add(id) {
-    const pc = new RTCPeerConnection({ iceServers: this.session.iceServers, bundlePolicy: 'max-bundle' });
+    const pc = new RTCPeerConnection({ iceServers: this.session.iceServers, iceTransportPolicy: this.session.iceTransportPolicy || 'all', bundlePolicy: 'max-bundle' });
     const peer = { pc, polite: this.self > id, makingOffer: false, ignoreOffer: false, settingAnswer: false,
       stream: new MediaStream(), candidates: [], senders: {}, initiator: this.self < id };
     this.peers.set(id, peer);
@@ -56,6 +64,7 @@ export class RoomClient {
       if (!peer.initiator || pc.signalingState !== 'stable') return;
       try {
         peer.makingOffer = true;
+        applyVideoCodecPreferences(pc, this.hardwareAcceleration);
         await pc.setLocalDescription();
         this.send({ type: 'signal', to: id, payload: { description: pc.localDescription.toJSON() } });
       } catch { if (!this.closed && pc.signalingState !== 'closed') this.callbacks.warning?.('Falha na negociação da transmissão.'); }
@@ -65,6 +74,7 @@ export class RoomClient {
       const track = this.stream?.getTracks().find(t => t.kind === kind);
       const transceiver = pc.addTransceiver(track || kind, { direction: 'sendrecv', ...(track ? { streams: [this.stream] } : {}) });
       peer.senders[kind] = transceiver.sender;
+      if (kind === 'video') applyVideoCodecPreferences(pc, this.hardwareAcceleration);
     }
   }
   async signal(id, { description, candidate }) {
@@ -81,11 +91,13 @@ export class RoomClient {
           const kind = transceiver.receiver.track.kind;
           transceiver.direction = 'sendrecv';
           peer.senders[kind] = transceiver.sender;
+          if (kind === 'video') applyVideoCodecPreferences(pc, this.hardwareAcceleration);
           await transceiver.sender.replaceTrack(this.stream?.getTracks().find(t => t.kind === kind) || null);
         }
       }
       for (const ice of peer.candidates.splice(0)) await pc.addIceCandidate(ice);
       if (description.type === 'offer') {
+        applyVideoCodecPreferences(pc, this.hardwareAcceleration);
         await pc.setLocalDescription();
         this.send({ type: 'signal', to: id, payload: { description: pc.localDescription.toJSON() } });
       }

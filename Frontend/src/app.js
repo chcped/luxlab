@@ -32,7 +32,7 @@ if (window.desktop?.onUpdateState) {
   };
 }
 const storage = { get(key, fallback) { try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; } }, set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} } };
-const colors = ['#7c6cff', '#ec4899', '#14b8a6', '#f59e0b', '#3b82f6', '#ef4444'];
+const colors = ['#111111', '#3a3a3a', '#6a6a6a', '#9a9a9a', '#c8c8c8', '#f2f2f2'];
 const avatars = ['initial', '🌙', '🎮', '🚀', '🐱', '🎧', '🌻'];
 const saved = storage.get('luxlab.profile', {});
 let profile = { name: String(saved.name || 'Visitante').slice(0, 32), color: colors.includes(saved.color) ? saved.color : colors[0], avatar: avatars.includes(saved.avatar) ? saved.avatar : 'initial' };
@@ -89,6 +89,7 @@ async function enterSession(nextSession, room = null) {
       removed(id) { remote.delete(id); connections.delete(id); },
       connection(id, state) { connections.set(id, state); updateConnection(); }, chat: addMessage,
       warning: text => toast(text, true), error(text) { leave(); toast(text, true); } });
+    client.setHardwareAcceleration(storage.get('luxlab.hardwareAcceleration', true));
     await client.connect();
     $('home').hidden = true; $('room').hidden = false; $('room-code').textContent = session.roomId;
     $('copy-invite').hidden = room?.role === 'member'; $('copy-invite').textContent = room ? '↗ Copiar convite permanente' : '↗ Copiar convite';
@@ -139,9 +140,16 @@ $('copy-invite').onclick = async () => {
     toast('Convite copiado! Envie o link para sua galera.');
   } catch { toast(`Não foi possível copiar o convite. Link: ${link}`, true); }
 };
+$('hardware-acceleration').checked = storage.get('luxlab.hardwareAcceleration', true);
+$('hardware-acceleration').onchange = () => {
+  const enabled = $('hardware-acceleration').checked;
+  storage.set('luxlab.hardwareAcceleration', enabled);
+  client?.setHardwareAcceleration(enabled);
+};
 async function openCapture() {
   if (localStream) { await stopSharing(); return; }
   selectedSource = null; $('sources').replaceChildren(); $('confirm-share').disabled = !!window.desktop;
+  $('hardware-acceleration').checked = storage.get('luxlab.hardwareAcceleration', true);
   $('capture-dialog').showModal();
   $('audio-process-field').hidden = !window.desktop;
   if (!window.desktop) { $('capture-help').textContent = 'Para transmitir som, escolha uma aba e compartilhe o áudio dela. Tela e janela serão compartilhadas sem áudio geral do PC.'; return; }
@@ -164,6 +172,8 @@ $('confirm-share').onclick = async () => {
   let captured;
   let pendingAudio;
   try {
+    storage.set('luxlab.hardwareAcceleration', $('hardware-acceleration').checked);
+    current.setHardwareAcceleration($('hardware-acceleration').checked);
     if (window.desktop && $('system-audio').checked && !$('audio-process').value) throw new Error('Selecione o aplicativo cujo áudio deseja transmitir.');
     if (window.desktop) await window.desktop.selectSource(selectedSource);
     captured = await navigator.mediaDevices.getDisplayMedia({ video: { height: { ideal: Number($('quality').value) }, frameRate: { ideal: 30, max: 30 } }, audio: !window.desktop && $('system-audio').checked ? { restrictOwnAudio: true, suppressLocalAudioPlayback: false } : false, systemAudio: 'exclude', windowAudio: 'exclude' });
@@ -270,4 +280,4 @@ $('leave-saved-room').onclick = async () => { try { await api(`/saved-rooms/${ma
 $('delete-saved-room').onclick = async () => { if (!confirm(`Excluir permanentemente “${managedRoom.name}”?`)) return; try { await api(`/saved-rooms/${managedRoom.id}`, { method: 'DELETE' }); $('manage-room-dialog').close(); await loadRooms(); } catch (error) { toast(error.message, true); } };
 updateProfile(); applyVolume(); renderAccount();
 const initialInvite = location.pathname.match(/^\/room\/([A-Za-z0-9_-]{12})\/?$/)?.[1]; if (initialInvite) { setMode('join'); $('invite').value = initialInvite; }
-loadConfig().catch(() => { serverConfig = { allowGuests: true }; renderAccount(); if (pendingInvite) toast('O servidor não anunciou suporte a contas e convites permanentes.', true); });
+loadConfig().catch(() => { serverConfig = { allowGuests: true }; renderAccount(); if (pendingInvite) toast('O servidor não anunciou suporte a contas e convites permanentes.', true); }).finally(() => { const boot = $('boot'); if (boot) boot.hidden = true; });

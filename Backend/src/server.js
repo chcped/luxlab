@@ -45,7 +45,7 @@ const stop = installStandalone(app, server, {
   authIssuer: process.env.AUTH_JWT_ISSUER || 'luxlab-auth', authAudience: process.env.AUTH_JWT_AUDIENCE || 'luxlab-desktop',
   maxRooms: Number(process.env.MAX_ROOMS || 100), maxMembers: Number(process.env.MAX_MEMBERS_PER_ROOM || 8),
   ttl: Number(process.env.ROOM_TTL_SECONDS || 14400),
-  iceTransportPolicy: process.env.ICE_TRANSPORT_POLICY || 'relay',
+  iceTransportPolicy: process.env.ICE_TRANSPORT_POLICY || 'all',
   iceServers: JSON.parse(process.env.ICE_SERVERS || '[]'),
   turnUrls: (process.env.TURN_URLS || '').split(',').map(s => s.trim()).filter(Boolean), turnSecret: process.env.TURN_SECRET || '',
   realtime

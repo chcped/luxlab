@@ -1,4 +1,5 @@
-export type RoomSession = { roomId: string; token: string };
+export type IceServer = { credential?: string; url?: string; urls?: string | string[]; username?: string };
+export type RoomSession = { roomId: string; token: string; iceServers?: IceServer[]; iceTransportPolicy?: 'all' | 'relay' };
 
 export class LuxlabApi {
   readonly base: string;

@@ -8,7 +8,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import rateLimit from 'express-rate-limit';
 
 const scrypt = promisify(crypto.scrypt);
-const palette = ['#7c6cff', '#ec4899', '#14b8a6', '#f59e0b', '#3b82f6', '#ef4444'];
+const palette = ['#111111', '#3a3a3a', '#6a6a6a', '#9a9a9a', '#c8c8c8', '#f2f2f2'];
 export function profile(value = {}) {
   if (!value || typeof value !== 'object') value = {};
   return { name: String(value.name || 'Visitante').trim().slice(0, 32) || 'Visitante',
